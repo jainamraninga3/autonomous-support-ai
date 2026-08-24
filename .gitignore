@@ -62,19 +62,10 @@ pip-wheel-metadata/
 *.db
 *.sqlite
 
-# Project data folders: keep folder structure but ignore generated runtime content
-# Keep .gitkeep files so folders remain in git
-data/documents/*
-data/processed/*
-data/evaluation/*
-!data/documents/.gitkeep
-!data/processed/.gitkeep
-!data/evaluation/.gitkeep
 
 # Optional: ignore uploaded model/cache folders if generated later
 models/
 checkpoints/
 cache/
 
-# Docker local overrides
-docker-compose.override.yml
+
