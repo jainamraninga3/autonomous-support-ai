@@ -1,38 +1,80 @@
-# Python
+# Python bytecode and caches
 __pycache__/
-*.pyc
+*.py[cod]
 *.pyo
+*.pyd
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+.pyre/
+.coverage
+.coverage.*
+htmlcov/
 
 # Virtual environments
 .venv/
 venv/
 env/
+ENV/
 
-# Environment files
+# Environment and secrets
 .env
+.env.*
+*.env
 *.env.local
+*.pem
+*.key
 
-# IDE
+# IDE and editor files
 .vscode/
 .idea/
+*.swp
+*.swo
 
-# OS
+# OS files
 .DS_Store
 Thumbs.db
+Desktop.ini
 
-# Logs
+# Logs and temp files
 *.log
+*.tmp
+*.temp
 
-# Data
+# Build and package artifacts
+build/
+dist/
+*.egg-info/
+site/
+
+# Node / frontend dependencies and generated output
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/dist/
+frontend/build/
+
+# Python package metadata
+pip-wheel-metadata/
+
+# Local database / runtime data
+*.sqlite3
+*.db
+*.sqlite
+
+# Project data folders: keep folder structure but ignore generated runtime content
+# Keep .gitkeep files so folders remain in git
 data/documents/*
 data/processed/*
+data/evaluation/*
 !data/documents/.gitkeep
 !data/processed/.gitkeep
+!data/evaluation/.gitkeep
 
-# Build artifacts
-dist/
-build/
-*.egg-info/
+# Optional: ignore uploaded model/cache folders if generated later
+models/
+checkpoints/
+cache/
+
+# Docker local overrides
+docker-compose.override.yml
