@@ -1,0 +1,14 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    env_file:
+      - ./backend/.env
+    environment:
+      # PostgreSQL runs on the host machine, not in a container.
+      - DATABASE_HOST=${DATABASE_HOST:-host.docker.internal}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
