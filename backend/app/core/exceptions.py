@@ -33,6 +33,13 @@ class NotFoundError(AppException):
     error_code = "not_found"
 
 
+class BadRequestError(AppException):
+    """Raised when the request itself is invalid (e.g. wrong file type)."""
+
+    status_code = status.HTTP_400_BAD_REQUEST
+    error_code = "bad_request"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach centralized exception handlers to the FastAPI app."""
 

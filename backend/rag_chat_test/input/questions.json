@@ -1,0 +1,65 @@
+{
+  "_comment": "Add as many questions as you want below. 'id' just has to be unique — it's used to label results. 'conversation_id' is optional per-question (usually leave it null so each question is tested independently); set it only if you deliberately want a question to continue an earlier conversation_id returned in a previous run's output.",
+"questions": [
+{
+"id": 1,
+"question": "What are the eligibility requirements and duration of Paternity Leave?",
+"conversation_id": null
+},
+{
+"id": 2,
+"question": "Within how many months must Paternity Leave be availed after childbirth or adoption?",
+"conversation_id": null
+},
+{
+"id": 3,
+"question": "How many weeks of paid maternity leave are biological mothers entitled to?",
+"conversation_id": null
+},
+{
+"id": 4,
+"question": "How much maternity leave is available to adoptive and commissioning mothers?",
+"conversation_id": null
+},
+{
+"id": 5,
+"question": "How much leave is provided in case of miscarriage, and what documentation is required?",
+"conversation_id": null
+},
+{
+"id": 6,
+"question": "What types of Special Leave are available and how many days are provided for each occasion?",
+"conversation_id": null
+},
+{
+"id": 7,
+"question": "How many days of Bereavement Leave are provided when an immediate family member dies, and who is considered an immediate family member?",
+"conversation_id": null
+},
+{
+"id": 8,
+"question": "What are the eligibility requirements, duration, approval requirements, and pay status for Sabbatical Leave?",
+"conversation_id": null
+},
+{
+"id": 9,
+"question": "Who is eligible for Election Leave and what documents must employees provide when applying?",
+"conversation_id": null
+},
+{
+"id": 10,
+"question": "Can Election Leave be carried forward or encashed?",
+"conversation_id": null
+},
+{
+"id": 11,
+"question": "How many Optional Holidays are employees entitled to per calendar year, and what are the rules for applying for them?",
+"conversation_id": null
+},
+{
+"id": 12,
+"question": "What happens to weekly offs and declared holidays when they fall within or immediately before or after a leave period?",
+"conversation_id": null
+}
+]
+}

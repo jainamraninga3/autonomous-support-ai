@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from app.core.config import get_settings
+from app.core.logging import get_logger
 
+logger = get_logger(__name__)
 settings = get_settings()
 
 engine: AsyncEngine = create_async_engine(
@@ -42,4 +44,5 @@ async def check_database_connection() -> bool:
             await conn.execute(text("SELECT 1"))
         return True
     except Exception:
+        logger.exception("Database connectivity check failed")
         return False

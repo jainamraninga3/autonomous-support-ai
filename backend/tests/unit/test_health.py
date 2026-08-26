@@ -24,3 +24,5 @@ async def test_health_endpoint_returns_ok_shape() -> None:
     assert body["status"] in {"ok", "degraded"}
     assert "app_name" in body
     assert "version" in body
+    assert "database" in body
+    assert "vector_store" in body

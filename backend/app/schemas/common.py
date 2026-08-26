@@ -10,6 +10,7 @@ class HealthStatus(BaseModel):
     app_name: str
     version: str
     database: str
+    vector_store: str
 
 
 class ErrorResponse(BaseModel):
