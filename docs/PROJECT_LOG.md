@@ -406,6 +406,35 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 
 ## Change Log (newest first)
 
+### 2026-08-27 — Made query rewriting visible: logged, and returned in the /api/v1/chat response
+**By:** Claude (Sonnet 5), this session.
+**Why:** User asked to see query rewriting in action. It was already
+fully implemented and wired in (`app/rag/query_rewriting.py`,
+`rewrite -> retrieve` edge — confirmed in an earlier session), but
+completely invisible: the rewritten query was computed, used for
+retrieval, then discarded — never logged, never returned to the caller.
+There was no way to actually observe it happening.
+
+Changed:
+- `backend/app/graph/workflow.py` — `rewrite_node` now logs
+  `Query rewrite: <original> -> <rewritten>` (INFO level, so it shows up
+  in both the console and `backend/logs/app.log`).
+- `backend/app/schemas/chat.py` — `ChatResponse` gained
+  `rewritten_query: str | None`, documented as null on the GENERAL/
+  refusal branch (no rewriting happens there).
+- `backend/app/services/chat_service.py` — `handle_message()` now reads
+  `rewritten_query` off the graph's result state and includes it in the
+  response.
+- `backend/README.md` — updated the `/api/v1/chat` response shape.
+
+No behavior change to retrieval itself — the rewrite was already being
+used exactly as before; this only makes it observable.
+
+**Not yet live-verified** — next step: ask a real RAG-required question
+and confirm `rewritten_query` comes back non-null and looks like a
+sensible rewrite (and that it's null for a GENERAL-classified
+question).
+
 ### 2026-08-27 — GENERAL-classified (off-topic) questions now refused outright, not answered
 **By:** Claude (Sonnet 5), this session.
 **Why:** Immediately after confirming the general-knowledge fallback

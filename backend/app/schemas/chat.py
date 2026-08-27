@@ -40,3 +40,12 @@ class ChatResponse(BaseModel):
     reply: str
     conversation_id: str | None = None
     citations: list[CitationResponse] = Field(default_factory=list)
+    rewritten_query: str | None = Field(
+        default=None,
+        description=(
+            "The retrieval-optimized rewrite of `message` (app/rag/query_rewriting.py). "
+            "Only present on the RAG_REQUIRED branch — null for a GENERAL-classified "
+            "refusal, since no rewriting happens there. Retrieval searches with this "
+            "rewrite; the final answer is still generated from the ORIGINAL `message`."
+        ),
+    )

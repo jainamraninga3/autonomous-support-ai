@@ -68,4 +68,9 @@ class ChatService:
         await self.chat_repository.add_message(chat_session.id, role="assistant", content=reply)
         await self.chat_repository.session.commit()
 
-        return ChatResponse(reply=reply, conversation_id=str(chat_session.id), citations=citations)
+        return ChatResponse(
+            reply=reply,
+            conversation_id=str(chat_session.id),
+            citations=citations,
+            rewritten_query=result.get("rewritten_query"),
+        )

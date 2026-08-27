@@ -262,8 +262,11 @@ calling the LLM directly.
   verify/general fallback), persisted to `chat_sessions` / `messages`
   in PostgreSQL. Body:
   `{"message": "...", "conversation_id": null}`. Returns
-  `{"reply": "...", "conversation_id": "...", "citations": [...]}` —
-  `citations` is empty for a general (non-RAG) reply. Uses Groq
+  `{"reply": "...", "conversation_id": "...", "citations": [...],
+  "rewritten_query": "..."}` — `citations` is empty for a general
+  (non-RAG) reply; `rewritten_query` is the retrieval-optimized rewrite
+  of `message` (null on the GENERAL/refusal branch, where no rewriting
+  happens — see "Rewrite" above). Uses Groq
   (`GROQ_API_KEY` + `GROQ_MODEL`) when a key is set; falls back to an
   echo stub (`StubLLMClient`) otherwise, so the app still runs without
   one (classification/rewriting/verification against the echo stub will

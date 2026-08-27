@@ -97,6 +97,7 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
 
     async def rewrite_node(state: GraphState) -> dict:
         rewritten = await rewrite_query(state["original_query"], llm_client)
+        logger.info("Query rewrite: %r -> %r", state["original_query"], rewritten)
         return {"rewritten_query": rewritten}
 
     async def retrieve_node(state: GraphState) -> dict:
