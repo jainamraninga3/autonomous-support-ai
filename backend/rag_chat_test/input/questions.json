@@ -1,105 +1,142 @@
 {
 "_comment": "45-question RAG test matrix covering straightforward retrieval, messy phrasing/query rewriting, plausible-but-not-covered questions, off-topic/security refusal, compound questions, edge cases, and multi-turn/session testing.",
+"_field_notes": "Optional per-question fields, added for the precision@10/recall@10 and robustness checks: 'expected_type' is one of 'off_topic' (should get the fixed out-of-scope refusal), 'uncovered' (should get the disclosed general-knowledge fallback), or 'covered' (should get a real grounded, cited answer) — omitted where genuinely ambiguous so the harness skips grading those rather than guessing. 'relevant_document_names' is document-level ground truth for precision/recall — only set where the content is confidently expected to come from that document.",
 "questions": [
 {
 "id": 1,
 "question": "How many casual leave days do employees get per year?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 2,
 "question": "When is a medical certificate required for sick leave?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 3,
 "question": "How many days of earned leave are given annually?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 4,
 "question": "What is the eligibility and duration of paternity leave?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 5,
 "question": "How many weeks of maternity leave are available for a biological mother versus an adoptive mother?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 6,
 "question": "Can casual leave be carried forward or encashed?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 7,
 "question": "What is the maximum number of sick leave days that can be accumulated?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 8,
 "question": "What happens to earned leave above 30 days at the end of the year?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 9,
 "question": "How is earned leave encashment calculated?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 10,
 "question": "What happens to unused optional holidays at the end of the calendar year?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 11,
 "question": "hw many casual leave day i get??",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 12,
 "question": "wfh policy days pls",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "uncovered"
 },
 {
 "id": 13,
 "question": "sick leave certi needed after how many days",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 14,
 "question": "matrnity leave weeks bio mother",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 15,
 "question": "paternity leave kitne din milti hai aur kab tak leni hoti hai?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 16,
 "question": "earned leave 30 se jyada ho to kya hota hai?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 17,
 "question": "bereavement leave kitne din ka hai?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 18,
 "question": "How many days of work-from-home leave can an employee take?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "uncovered"
 },
 {
 "id": 19,
 "question": "What is the notice period for resignation?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "uncovered"
 },
 {
 "id": 20,
 "question": "Is there a leave policy for jury duty?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "uncovered"
 },
 {
 "id": 21,
@@ -109,72 +146,93 @@
 {
 "id": 22,
 "question": "What is the company's policy for work-from-home arrangements?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "uncovered"
 },
 {
 "id": 23,
 "question": "Does this document specify how many days of leave employees can take for jury duty?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "uncovered"
 },
 {
 "id": 24,
 "question": "what is 2+2",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "off_topic"
 },
 {
 "id": 25,
 "question": "Write me a Python function to sort a list.",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "off_topic"
 },
 {
 "id": 26,
 "question": "What does Amazon do?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "off_topic"
 },
 {
 "id": 27,
 "question": "Tell me a joke.",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "off_topic"
 },
 {
 "id": 28,
 "question": "What's the capital of France?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "off_topic"
 },
 {
 "id": 29,
 "question": "What are the eligibility requirements, duration, and approval process for sabbatical leave?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 30,
 "question": "What are all the types of leave available for a new mother, including maternity, miscarriage, and related provisions?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 31,
 "question": "Compare casual leave and earned leave with respect to annual entitlement, carry-forward rules, and encashment.",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 32,
 "question": "Compare paternity leave and maternity leave in terms of eligibility, duration, and the period within which the leave must be used.",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 33,
 "question": "Compare election leave and optional holidays in terms of eligibility, number of days, application requirements, and whether they can be carried forward.",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 34,
 "question": "What are the leave provisions for childbirth, adoption, miscarriage, and tubectomy operations?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 35,
 "question": "What are the rules for weekly offs and declared holidays when they occur during or immediately before or after a leave period?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 36,
@@ -204,27 +262,37 @@
 {
 "id": 41,
 "question": "If I have 35 days of earned leave on December 31, what happens to the extra 5 days?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 42,
 "question": "If an employee takes leave for an entire week and there is a declared holiday during that week, is that holiday counted as leave?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 43,
 "question": "What happens if an employee exhausts their available sick leave during a prolonged illness?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 44,
 "question": "An employee has completed 3 years of service and wants to take 45 days of sabbatical leave. Is this allowed, who must approve it, and is it paid?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 },
 {
 "id": 45,
 "question": "An employee wants to take an optional holiday but has already used both optional holidays for the year. What does the policy say about taking another optional holiday?",
-"conversation_id": null
+"conversation_id": null,
+"expected_type": "covered",
+"relevant_document_names": ["Leave_Policy_1.pdf"]
 }
 ]
 }

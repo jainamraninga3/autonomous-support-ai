@@ -100,6 +100,100 @@ def now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def describe_reranking_method(rerank, alpha):
+    """Human-readable label for a retrieval/reranking configuration —
+    e.g. "Hybrid search (alpha=0.5) + BGE-Reranker-v2-M3"."""
+    if alpha == 0.0:
+        base = "BM25-only search"
+    elif alpha == 1.0:
+        base = "Vector-only search"
+    else:
+        base = f"Hybrid search (alpha={alpha})"
+    return f"{base} + BGE-Reranker-v2-M3" if rerank else f"{base}, no reranking"
+
+
+def compute_precision_recall(citations, question_entry, k=None):
+    """Precision@k / Recall@k against ground truth optionally provided in
+    questions.json — "relevant_chunk_ids" (exact chunk_id match, precise)
+    takes priority over "relevant_document_names" (document-level, coarser
+    but easier to author by hand). Returns None if the question provides
+    neither — this NEVER fabricates a score for an ungraded question.
+    """
+    k = k or config.PRECISION_RECALL_K
+    chunk_ground_truth = question_entry.get("relevant_chunk_ids")
+    doc_ground_truth = question_entry.get("relevant_document_names")
+
+    if chunk_ground_truth:
+        retrieved = [c.get("chunk_id") for c in (citations or [])]
+        relevant = set(chunk_ground_truth)
+        match_field = "chunk_id"
+    elif doc_ground_truth:
+        retrieved = [c.get("document_name") for c in (citations or [])]
+        relevant = set(doc_ground_truth)
+        match_field = "document_name"
+    else:
+        return None
+
+    retrieved_at_k = retrieved[:k]
+    hits = sum(1 for item in retrieved_at_k if item in relevant)
+    precision_at_k = round(hits / len(retrieved_at_k), 3) if retrieved_at_k else 0.0
+    recall_at_k = round(hits / len(relevant), 3) if relevant else None
+
+    return {
+        "k": k,
+        "match_field": match_field,
+        "ground_truth": sorted(relevant),
+        "retrieved_at_k": retrieved_at_k,
+        "hits": hits,
+        f"precision_at_{k}": precision_at_k,
+        f"recall_at_{k}": recall_at_k,
+    }
+
+
+def check_robustness(question_entry, answer_text, citations):
+    """Verify (not assume) that the backend's classify/refuse/fallback
+    rules actually fired the way `expected_type` in questions.json says
+    they should. Skipped (checked=False) if `expected_type` is absent —
+    never grades a question nobody labeled."""
+    expected = question_entry.get("expected_type")
+    if not expected:
+        return {
+            "expected_type": None,
+            "checked": False,
+            "note": "No expected_type set for this question — add 'off_topic', "
+            "'uncovered', or 'covered' to questions.json to enable this check.",
+        }
+
+    answer_text = answer_text or ""
+    has_citations = bool(citations)
+    has_out_of_scope_marker = config.OUT_OF_SCOPE_MARKER in answer_text
+    has_fallback_marker = config.GENERAL_FALLBACK_MARKER in answer_text
+
+    if expected == "off_topic":
+        passed = has_out_of_scope_marker and not has_citations
+        detail = "off-topic refusal fired correctly" if passed else (
+            "expected the fixed out-of-scope refusal with no citations — did not get it"
+        )
+    elif expected == "uncovered":
+        passed = has_fallback_marker and not has_citations
+        detail = "disclosed general-knowledge fallback fired correctly" if passed else (
+            "expected the disclosed general-knowledge fallback with no citations — did not get it"
+        )
+    elif expected == "covered":
+        passed = has_citations and not has_out_of_scope_marker and not has_fallback_marker
+        detail = "grounded, cited answer as expected" if passed else (
+            "expected a grounded answer with real citations — did not get it"
+        )
+    else:
+        return {
+            "expected_type": expected,
+            "checked": False,
+            "note": f"Unknown expected_type {expected!r} — use 'off_topic', 'uncovered', or 'covered'.",
+        }
+
+    return {"expected_type": expected, "checked": True, "passed": passed, "detail": detail}
+
+
 def load_questions():
     if not config.INPUT_FILE.exists():
         print(f"Input file not found: {config.INPUT_FILE}")
@@ -276,29 +370,78 @@ def build_summary(results):
     else:
         summary["note"] = "No questions were successfully evaluated by the LLM judge."
 
+    # --- Precision@10 / Recall@10 for the /api/v1/chat pipeline, only
+    # across questions that provided ground truth (relevant_document_names
+    # or relevant_chunk_ids in questions.json) ---
+    chat_pr = [r["precision_recall_at_10"] for r in results if r.get("precision_recall_at_10")]
+    if chat_pr:
+        summary["chat_pipeline_precision_at_10"] = round(
+            statistics.mean(pr["precision_at_10"] for pr in chat_pr), 3
+        )
+        recalls = [pr["recall_at_10"] for pr in chat_pr if pr["recall_at_10"] is not None]
+        summary["chat_pipeline_recall_at_10"] = round(statistics.mean(recalls), 3) if recalls else None
+        summary["chat_pipeline_precision_recall_question_count"] = len(chat_pr)
+    else:
+        summary["chat_pipeline_precision_recall_note"] = (
+            "No question provided ground truth (relevant_document_names / relevant_chunk_ids) — "
+            "precision/recall not computed for any question."
+        )
+
+    # --- Robustness: did each question's actual behavior match its
+    # expected_type (off_topic/uncovered/covered), where labeled? ---
+    checked = [r["robustness_check"] for r in results if r.get("robustness_check", {}).get("checked")]
+    if checked:
+        by_type = {}
+        for rc in checked:
+            t = rc["expected_type"]
+            bucket = by_type.setdefault(t, {"passed": 0, "failed": 0})
+            bucket["passed" if rc["passed"] else "failed"] += 1
+        summary["robustness_summary"] = {
+            "total_checked": len(checked),
+            "total_passed": sum(1 for rc in checked if rc["passed"]),
+            "total_failed": sum(1 for rc in checked if not rc["passed"]),
+            "by_expected_type": by_type,
+        }
+    else:
+        summary["robustness_note"] = (
+            "No question set expected_type — robustness rule-compliance not checked for any question."
+        )
+
     # --- Reranking/retrieval variant comparison, aggregated across all questions ---
-    variant_stats = {}  # name -> {scores: [...], times: [...], wins: n}
+    variant_stats = {}  # name -> {scores, times, wins, precisions, recalls}
     for r in results:
         for vr in r.get("rerank_variants", []):
             name = vr["variant_name"]
-            stats = variant_stats.setdefault(name, {"scores": [], "times": [], "wins": 0})
+            stats = variant_stats.setdefault(
+                name, {"scores": [], "times": [], "wins": 0, "precisions": [], "recalls": [], "method": vr.get("reranking_method")}
+            )
             if vr["status"] == "SUCCESS":
                 stats["times"].append(vr["response_time_seconds"])
                 if vr.get("llm_evaluation") and isinstance(vr["llm_evaluation"].get("overall_score"), (int, float)):
                     stats["scores"].append(vr["llm_evaluation"]["overall_score"])
+                if vr.get("precision_recall_at_10"):
+                    stats["precisions"].append(vr["precision_recall_at_10"]["precision_at_10"])
+                    if vr["precision_recall_at_10"]["recall_at_10"] is not None:
+                        stats["recalls"].append(vr["precision_recall_at_10"]["recall_at_10"])
         best = r.get("best_variant")
         if best and best["name"] in variant_stats:
             variant_stats[best["name"]]["wins"] += 1
         elif best and best["name"] == "chat_pipeline (/api/v1/chat)":
-            variant_stats.setdefault("chat_pipeline (/api/v1/chat)", {"scores": [], "times": [], "wins": 0})
+            variant_stats.setdefault(
+                "chat_pipeline (/api/v1/chat)",
+                {"scores": [], "times": [], "wins": 0, "precisions": [], "recalls": [], "method": None},
+            )
             variant_stats["chat_pipeline (/api/v1/chat)"]["wins"] += 1
 
     if variant_stats:
         summary["rerank_variant_comparison"] = {
             name: {
+                "reranking_method": s["method"],
                 "avg_overall_score": round(statistics.mean(s["scores"]), 2) if s["scores"] else None,
                 "avg_response_time_seconds": round(statistics.mean(s["times"]), 3) if s["times"] else None,
                 "times_best_for_a_question": s["wins"],
+                "avg_precision_at_10": round(statistics.mean(s["precisions"]), 3) if s["precisions"] else None,
+                "avg_recall_at_10": round(statistics.mean(s["recalls"]), 3) if s["recalls"] else None,
             }
             for name, s in variant_stats.items()
         }
@@ -379,16 +522,33 @@ def main():
                 else:
                     print(f"    -> evaluation failed: {eval_error}")
 
+                record["precision_recall_at_10"] = compute_precision_recall(record["citations"], q)
+                if record["precision_recall_at_10"]:
+                    pr = record["precision_recall_at_10"]
+                    print(f"    -> precision@10={pr['precision_at_10']} recall@10={pr['recall_at_10']} "
+                          f"(matched by {pr['match_field']})")
+
+                record["robustness_check"] = check_robustness(q, record["answer"], record["citations"])
+                if record["robustness_check"]["checked"]:
+                    rc = record["robustness_check"]
+                    verdict = "PASS" if rc["passed"] else "FAIL"
+                    print(f"    -> robustness [{rc['expected_type']}]: {verdict} — {rc['detail']}")
+            else:
+                record["precision_recall_at_10"] = None
+                record["robustness_check"] = check_robustness(q, None, [])
+
             record["rerank_variants"] = []
             if config.ENABLE_RERANK_VARIANTS:
                 for variant in config.RERANK_VARIANTS:
-                    print(f"    -> [variant: {variant['name']}] querying /api/v1/rag/ask "
-                          f"(rerank={variant['rerank']}, alpha={variant['alpha']})...")
+                    method_label = describe_reranking_method(variant["rerank"], variant["alpha"])
+                    print(f"    -> [variant: {variant['name']}] {method_label} — querying /api/v1/rag/ask "
+                          f"for question {q_id!r} ({q_text!r})...")
                     variant_result = call_rag_ask_api(q_text, variant)
                     print(f"       status={variant_result['status']}  time={variant_result['response_time_seconds']}s")
 
                     variant_record = {
                         "variant_name": variant["name"],
+                        "reranking_method": method_label,
                         "config": {
                             "rerank": variant["rerank"],
                             "alpha": variant["alpha"],
@@ -406,6 +566,7 @@ def main():
                         "llm_evaluation": None,
                         "llm_evaluation_time_seconds": None,
                         "llm_evaluation_error": None,
+                        "precision_recall_at_10": None,
                         "raw_response": variant_result["raw_response"],
                     }
 
@@ -429,6 +590,13 @@ def main():
                         if v_eval:
                             print(f"       overall_score={v_eval.get('overall_score')} "
                                   f"hallucination_risk={v_eval.get('hallucination_risk')}")
+
+                        variant_record["precision_recall_at_10"] = compute_precision_recall(
+                            variant_record["citations"], q
+                        )
+                        if variant_record["precision_recall_at_10"]:
+                            pr = variant_record["precision_recall_at_10"]
+                            print(f"       precision@10={pr['precision_at_10']} recall@10={pr['recall_at_10']}")
 
                     record["rerank_variants"].append(variant_record)
 

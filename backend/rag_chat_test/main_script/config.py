@@ -60,3 +60,31 @@ OUTPUT_DIR = BASE_DIR / "output"
 # every question starts a brand-new conversation — the right choice for
 # independent quality testing of each question.
 CHAIN_CONVERSATIONS = False
+
+# --- Robustness check markers ---
+# The two fixed strings the backend's LangGraph workflow uses for its
+# security/scope rules (app/graph/workflow.py's _OUT_OF_SCOPE_ANSWER and
+# _GENERAL_FALLBACK_PREFIX). Duplicated here rather than imported —
+# this harness deliberately never imports anything from backend/app, it
+# only talks to it over HTTP — so these two strings must be kept in
+# sync by hand if the backend's wording ever changes. Used to verify
+# (not just assume) that a question got the behavior its `expected_type`
+# says it should, per question in questions.json:
+#   "off_topic"  -> reply must contain OUT_OF_SCOPE_MARKER, no citations
+#   "uncovered"  -> reply must contain GENERAL_FALLBACK_MARKER, no citations
+#   "covered"    -> reply must have real citations, neither marker present
+# `expected_type` is optional per question — omit it to skip this check
+# for a question you're not confident how to grade (e.g. genuinely
+# ambiguous or edge-case questions).
+OUT_OF_SCOPE_MARKER = "I'm a support assistant for our company's policies and documents"
+GENERAL_FALLBACK_MARKER = "This question isn't covered by our available documents"
+
+# --- Precision@10 / Recall@10 ---
+# Computed only for questions that provide ground truth in
+# questions.json, via one of:
+#   "relevant_document_names": ["Leave_Policy_1.pdf"]   (document-level, easier to author)
+#   "relevant_chunk_ids": ["<uuid>", ...]                 (chunk-level, exact — see a prior
+#                                                           run's citations for real chunk_ids)
+# If a question provides neither, precision/recall is reported as null
+# for it (never fabricated) rather than silently scored as 0.
+PRECISION_RECALL_K = 10

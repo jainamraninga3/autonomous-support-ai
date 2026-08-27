@@ -406,6 +406,73 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 
 ## Change Log (newest first)
 
+### 2026-08-27 — rag_chat_test: added precision@10/recall@10, reranking-method labels, and robustness (rule-compliance) checks
+**By:** Claude (Sonnet 5), this session.
+**Why:** User asked for the harness to measure retrieval precision/
+recall, clearly log which reranking method was used per question, and
+verify the security/scope rules (off-topic refusal, disclosed
+general-knowledge fallback, grounded-answer citations) are actually
+being enforced — not just eyeballed by reading raw output by hand.
+Explicit instruction: add to the existing report, don't remove or
+restructure anything already there.
+
+Changed (all within `backend/rag_chat_test/`, still zero imports from
+`backend/app` — talks to the backend only over HTTP, per this folder's
+existing design):
+- `main_script/config.py` — added `OUT_OF_SCOPE_MARKER`/
+  `GENERAL_FALLBACK_MARKER` (the two fixed strings
+  `app/graph/workflow.py` uses for its refusal/fallback — duplicated by
+  hand here on purpose, since this harness deliberately never imports
+  backend code; must be kept in sync manually if that wording changes)
+  and `PRECISION_RECALL_K = 10`.
+- `main_script/test_runner.py` — three new functions:
+  - `describe_reranking_method(rerank, alpha)` — human-readable label
+    per retrieval config, e.g. "Hybrid search (alpha=0.5) +
+    BGE-Reranker-v2-M3". Logged to console per variant per question, and
+    stored as `reranking_method` on each `rerank_variants` entry.
+  - `compute_precision_recall(citations, question_entry, k=10)` —
+    matches the top-k returned citations against ground truth a
+    question optionally provides in `questions.json`
+    (`relevant_chunk_ids` exact-match, or coarser
+    `relevant_document_names`). Returns `None` (never a fabricated
+    score) if the question provides neither. Computed for both the
+    `/api/v1/chat` answer and every rerank variant.
+  - `check_robustness(question_entry, answer_text, citations)` — for a
+    question that sets `expected_type` (`"off_topic"` / `"uncovered"` /
+    `"covered"`), checks the actual reply against the matching marker
+    string + citation-emptiness rule and reports pass/fail with a
+    reason. Skipped (not graded) if `expected_type` is absent.
+  - All three wired into the existing per-question record and each
+    `rerank_variants` entry as NEW keys (`precision_recall_at_10`,
+    `robustness_check`, `reranking_method`) — no existing field
+    renamed, removed, or restructured. `build_summary()` gained
+    aggregate averages (`chat_pipeline_precision_at_10`/
+    `_recall_at_10`, `robustness_summary` with a pass/fail breakdown by
+    `expected_type`) and extended the existing
+    `rerank_variant_comparison` table with `reranking_method`/
+    `avg_precision_at_10`/`avg_recall_at_10` per variant, same
+    approach: additive, not replacing what was already there.
+- `input/questions.json` — annotated the confidently-labelable
+  questions (out of the existing 45) with `expected_type` and/or
+  `relevant_document_names` (all pointing at `Leave_Policy_1.pdf`, the
+  only ingested document): straightforward/messy-phrasing policy
+  questions -> `"covered"`; WFH/notice-period/jury-duty questions ->
+  `"uncovered"`; math/coding/Amazon/joke/capital-of-France ->
+  `"off_topic"`. Left genuinely ambiguous ones unset on purpose (empty
+  question, "x", mixed-intent questions, the prompt-injection attempt,
+  "friend's wedding" leave) rather than guess a possibly-wrong ground
+  truth that would produce misleading pass/fail results.
+- `README.md` — documented the three new optional `questions.json`
+  fields (`expected_type`, `relevant_document_names`,
+  `relevant_chunk_ids`), the new "What it does" items, and updated the
+  sample output JSON to show the new fields alongside the existing ones.
+
+**Not yet run** — next step: user runs `python test_runner.py` (their
+own machine, own venv, same as always) and manually reviews the new
+`precision_recall_at_10`/`robustness_check`/`reranking_method` fields
+in the output against the actual answers, per their own request to
+check this all manually rather than trust it blindly.
+
 ### 2026-08-27 — Made query rewriting visible: logged, and returned in the /api/v1/chat response
 **By:** Claude (Sonnet 5), this session.
 **Why:** User asked to see query rewriting in action. It was already
