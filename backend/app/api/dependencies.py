@@ -28,14 +28,17 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
 def get_llm_client() -> LLMClient:
     """Provide the configured LLM client implementation.
 
-    Uses Groq when `GROQ_API_KEY` is set; falls back to the echo stub
-    otherwise (e.g. local dev without a key, or tests) so the app still
-    boots and the chat endpoint stays usable without external calls.
+    Uses Groq when at least one of `GROQ_API_KEY`/`GROQ_API_1`/`_2`/`_3`
+    is set (falling through to the next configured key on a rate limit —
+    see `GroqLLMClient`); falls back to the echo stub otherwise (e.g.
+    local dev without a key, or tests) so the app still boots and the
+    chat endpoint stays usable without external calls.
     """
     settings = get_settings()
-    if settings.GROQ_API_KEY:
-        return GroqLLMClient(api_key=settings.GROQ_API_KEY, model=settings.GROQ_MODEL)
-    logger.warning("GROQ_API_KEY not set — falling back to StubLLMClient (echo)")
+    keys = settings.groq_api_keys
+    if keys:
+        return GroqLLMClient(api_keys=keys, model=settings.GROQ_MODEL)
+    logger.warning("No Groq API key set — falling back to StubLLMClient (echo)")
     return StubLLMClient()
 
 

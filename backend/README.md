@@ -27,6 +27,20 @@ pip install -r requirements/dev.txt
 copy .env.example .env   # then edit POSTGRES_PASSWORD, GROQ_API_KEY, etc.
 ```
 
+## Multiple Groq API keys (automatic rate-limit fallback)
+
+Set `GROQ_API_1`/`GROQ_API_2`/`GROQ_API_3` in `.env` alongside
+`GROQ_API_KEY` (all optional — set only the ones you have). `GroqLLMClient`
+(`app/llm/base.py`) tries `GROQ_API_KEY` first; if a call hits a rate
+limit (`429` — e.g. a daily token quota exhausted), it automatically
+retries the *same* request against the next configured key instead of
+failing it, and remembers which key last worked so later calls start
+there directly rather than re-trying dead keys every time. Only raises
+(`429 rate_limited`, see Endpoints below) once every configured key is
+rate-limited. A non-rate-limit Groq error (auth failure, 5xx, etc.)
+surfaces immediately as `503 service_unavailable` — a different key
+wouldn't fix those, so it doesn't burn through the rest of the list.
+
 ## Start PostgreSQL + Weaviate (Docker)
 
 ```powershell
@@ -225,7 +239,8 @@ calling the LLM directly.
   echo stub (`StubLLMClient`) otherwise, so the app still runs without
   one (classification/rewriting/verification against the echo stub will
   behave oddly since it doesn't understand the prompts — fine for
-  proving the flow wires together, not for real answers).
+  proving the flow wires together, not for real answers). See "Multiple
+  Groq API keys" below for automatic rate-limit fallback.
 - `POST /api/v1/rag/ask` — HTTP entry point onto the same pipeline as
   `scripts.ask`: hybrid search → optional rerank → grounded answer with
   citations, no classification/rewriting/verification. Body:

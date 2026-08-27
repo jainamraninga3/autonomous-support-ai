@@ -356,6 +356,105 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 
 ## Change Log (newest first)
 
+### 2026-08-26 — Multiple Groq API keys with automatic rate-limit fallback
+**By:** Claude (Sonnet 5), this session.
+**Why:** Immediately after diagnosing the Groq daily-token-quota 500s
+(previous entry), user provided 3 additional Groq API keys and asked
+for automatic fallback to the next key whenever the current one hits
+its rate limit, keeping the existing key as the primary
+(`GROQ_API_KEY`).
+
+Changed:
+- `backend/.env` (real, gitignored) — added `GROQ_API_1`/`_2`/`_3` with
+  the 3 new keys; `GROQ_API_KEY` unchanged as the primary/first-tried
+  key. `backend/.env.example` — added the same 3 vars, blank (template
+  only, no real values), documented as optional.
+- `backend/app/core/config.py` — `Settings` gained `GROQ_API_1`/`_2`/
+  `_3` (each optional, default `""`) and a `groq_api_keys` property
+  returning all configured keys in order with blanks dropped.
+- `backend/app/llm/base.py` — `GroqLLMClient` now takes `api_keys:
+  list[str]` (was a single `api_key: str`) and holds one `AsyncGroq`
+  client per key. On `groq.RateLimitError` it retries the *same*
+  request against the next key in the list instead of failing;
+  `_current_index` is sticky (sticks to whichever key last worked, so a
+  later call starts there directly rather than re-trying already-dead
+  keys from the front every time). Only raises our `RateLimitError`
+  (429) once every configured key has been tried and rate-limited on
+  this call. A non-rate-limit `groq.APIError` still raises
+  `ServiceUnavailableError` (503) immediately, without trying other
+  keys — a different key wouldn't fix an auth failure or a Groq-side
+  5xx.
+- `backend/app/api/dependencies.py` — `get_llm_client()` now passes
+  `settings.groq_api_keys` (the full list) instead of a single
+  `GROQ_API_KEY`; falls back to `StubLLMClient` only if that list is
+  entirely empty.
+- `backend/tests/unit/test_llm_base.py` — rewritten for the new
+  constructor signature; covers: first key succeeding without touching
+  others, falling through on a rate limit, the sticky index skipping an
+  already-dead key on a later call, raising once all keys are
+  rate-limited, a non-rate-limit error raising immediately without
+  trying other keys, and the empty-key-list constructor guard.
+- `backend/README.md` — new "Multiple Groq API keys (automatic
+  rate-limit fallback)" section; updated the `/api/v1/chat` endpoint
+  doc to point to it.
+
+Full suite run by the user: **73 passed** (up from 69 — 6 new
+`test_llm_base.py` cases added, 2 old ones replaced for the new
+constructor signature). **Not yet live-verified against the real Groq
+API** — next step: exhaust (or simulate exhausting) the primary key and
+confirm a real request actually falls through to `GROQ_API_1` rather
+than just passing in unit tests with fakes.
+
+### 2026-08-26 — Root cause of the `rag_chat_test` 500s found and fixed: Groq daily token quota exhausted, now surfaced cleanly instead of a generic 500
+**By:** Claude (Sonnet 5), this session.
+**Why:** With file logging in place (previous entry), the user re-ran
+`rag_chat_test` and this time it failed 12/12 questions immediately —
+the real traceback (now captured) shows the actual cause has been the
+same the whole time:
+```
+groq.RateLimitError: Error code: 429 - {'error': {'message': 'Rate
+limit reached for model `openai/gpt-oss-120b` ... on tokens per day
+(TPD): Limit 200000, Used 199798, Requested 1513. Please try again in
+9m26.352s. ...'}}
+```
+This is a hard daily token quota on the Groq free/on-demand tier for
+this model (200,000 tokens/day), not a bug in retrieval, chunking, or
+the graph. It explains the EARLIER run's exact pattern too (8 clean
+successes, then 12 consecutive identical failures that never
+recovered) — the day's quota ran out partway through that run and
+stayed out. Root cause is entirely external (nothing to "fix" about
+the quota itself — wait for the daily reset or upgrade the Groq plan),
+but the app was swallowing it into an opaque `500 internal_error`
+indistinguishable from any other bug, via the generic unhandled-
+exception handler in `app/core/exceptions.py`. That handling gap is a
+real, fixable problem on its own — the next rate-limit hit (quota,
+per-minute, whatever) should be immediately diagnosable from the HTTP
+response alone, not require reading server logs.
+
+Changed:
+- `backend/app/core/exceptions.py` — added `RateLimitError` (429,
+  `error_code: "rate_limited"`).
+- `backend/app/llm/base.py` — `GroqLLMClient.generate_reply()` now
+  catches `groq.RateLimitError` specifically (-> our `RateLimitError`,
+  429) and the broader `groq.APIError` (-> `ServiceUnavailableError`,
+  503) around the `chat.completions.create()` call, logging each
+  before re-raising. Every caller (classification, query rewriting,
+  chat/RAG answer generation, verification — all go through this one
+  method) now benefits without needing its own try/except.
+- `backend/tests/unit/test_llm_base.py` (new) — constructs real
+  `groq.RateLimitError`/`groq.APIError` instances (via `httpx.Response`)
+  and asserts they're translated correctly; no real Groq call made.
+
+**Not yet re-verified live** — next step: wait for the Groq daily quota
+to reset (or use a different/paid key), re-run `rag_chat_test`, and
+confirm failures now return `429 {"error_code":"rate_limited",...}`
+instead of the generic 500 if the quota is hit again, and that the
+actual RAG answers are otherwise correct once real Groq calls succeed
+(chunking/retrieval were never actually implicated by any evidence in
+this investigation — the external analysis that first flagged Q9-Q20
+as a "retrieval failure" was reasoning from a null-stripped summary
+file, not the raw error responses).
+
 ### 2026-08-26 — Added rotating file log handler, to diagnose the unresolved `rag_chat_test` 500 errors
 **By:** Claude (Sonnet 5), this session.
 **Why:** User shared the `rag_chat_test` harness's full run output

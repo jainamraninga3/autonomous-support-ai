@@ -42,8 +42,21 @@ class Settings(BaseSettings):
     WEAVIATE_GRPC_PORT: int = 50051
 
     # --- Groq (LLM provider) ---
+    # GROQ_API_KEY is tried first; GROQ_API_1/_2/_3 are optional extra
+    # keys the client automatically falls through to, in order, whenever
+    # the current key hits a rate limit (see `app/llm/base.py`). Each is
+    # independently optional — set only the ones you have.
     GROQ_API_KEY: str = ""
+    GROQ_API_1: str = ""
+    GROQ_API_2: str = ""
+    GROQ_API_3: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-120b"
+
+    @property
+    def groq_api_keys(self) -> list[str]:
+        """All configured Groq API keys, in fallback order, blanks
+        dropped. Empty if none are set."""
+        return [key for key in (self.GROQ_API_KEY, self.GROQ_API_1, self.GROQ_API_2, self.GROQ_API_3) if key]
 
     # --- Document ingestion ---
     # Where extracted/chunked output is written, ahead of Weaviate being

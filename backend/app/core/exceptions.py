@@ -40,6 +40,13 @@ class BadRequestError(AppException):
     error_code = "bad_request"
 
 
+class RateLimitError(AppException):
+    """Raised when an upstream provider (e.g. Groq) rate-limits us."""
+
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    error_code = "rate_limited"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach centralized exception handlers to the FastAPI app."""
 
