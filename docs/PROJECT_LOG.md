@@ -40,51 +40,77 @@ sense).
 
 ## Current State (authoritative — always keep this section accurate)
 
-**Phase:** Foundation / initial setup. No RAG pipeline implemented yet.
+**Phase:** V1 RAG pipeline complete and live-verified end to end
+(ingestion, embedding, hybrid search, reranking, grounded generation
+with citations, query classification, query rewriting, answer
+verification, a scoped general-knowledge fallback, and an off-topic
+refusal boundary) — see "Explicitly NOT implemented yet" below for
+what's deliberately still missing.
 
 **Stack in use right now:**
 - Python 3.11, FastAPI, SQLAlchemy 2.x (async) + asyncpg
-- PostgreSQL — runs via Docker (`docker-compose.yml`, service `postgres`)
-- Weaviate — runs via Docker (`docker-compose.yml`, service `weaviate`),
-  connection helper only, no collections/schema yet
-- LangGraph — dependency added, minimal single-node compiled graph exists
-  in `backend/app/graph/`, NOT yet wired into the chat endpoint
+- PostgreSQL — runs via Docker (`docker-compose.yml`, service `postgres`,
+  host port 5433)
+- Weaviate — runs via Docker (`docker-compose.yml`, service `weaviate`,
+  ports 8080/50051), `DocumentChunk` collection actively used
+- LangGraph — `backend/app/graph/workflow.py`'s `build_graph()` compiles
+  the full classify/rewrite/retrieve/generate/verify/fallback pipeline
+  (see the dedicated entry below); drives `POST /api/v1/chat`
 - LLM: abstraction exists (`backend/app/llm/base.py`). `GroqLLMClient`
-  (via the `groq` SDK's `AsyncGroq`) is now wired in and used whenever
-  `GROQ_API_KEY` is set; `StubLLMClient` (echoes input) remains as the
-  automatic fallback when no key is set (local dev/tests without Groq
-  access). **Verified live 2026-08-25** — user added their own
-  `GROQ_API_KEY`; a real chat request returned a genuine Groq reply
-  (not the stub echo) and persisted correctly to Postgres (see Change
-  Log entry below).
+  now supports MULTIPLE keys (`GROQ_API_KEY` tried first, then
+  `GROQ_API_1`/`_2`/`_3` in order) with automatic fallback to the next
+  key on a rate limit (`groq.RateLimitError` -> retry next key; a
+  non-rate-limit `groq.APIError` -> `ServiceUnavailableError` 503
+  immediately, no key-cycling) — added 2026-08-26 after a real Groq
+  daily-token-quota exhaustion was diagnosed as the root cause of
+  `rag_chat_test` 500s (see Change Log). `StubLLMClient` (echoes input)
+  remains the automatic fallback only when NO Groq key at all is
+  configured. **Verified live 2026-08-25** (single key) — real Groq
+  reply, persisted correctly to Postgres. Multi-key fallback itself is
+  unit-tested (6 cases) but NOT yet exercised against a real rate limit
+  in production use.
 
 **Working endpoints:**
 - `GET /health` — reports app status + PostgreSQL + Weaviate connectivity
-- `POST /api/v1/chat` — no longer calls the LLM directly; now runs the
-  full LangGraph workflow (see below): classify -> general LLM reply, or
-  rewrite -> retrieve -> generate -> verify. Still persists both the user
-  message and the final reply to PostgreSQL (`chat_sessions` /
-  `messages`) exactly as before; `conversation_id` semantics unchanged
-  (session UUID, reuse to continue a session). Response gained a
-  `citations` field (empty for a general reply). **Verified live
-  2026-08-26** — both the GENERAL branch (2 Groq calls, no retrieval)
-  and the RAG branch (4 Groq calls: classify/rewrite/generate/verify,
-  correct grounded answer + citation, verification judged SUPPORTED)
-  confirmed against real Groq/BGE-M3/Weaviate via the actual console log,
-  not just response shape; persistence confirmed unaffected (see Change
-  Log entry below).
-- `POST /api/v1/rag/ask` — unchanged by the above; still always-RAG, no
-  classification, matching `scripts.ask`. See its own entry further
-  down.
+- `POST /api/v1/chat` — runs the full LangGraph workflow: `classify` ->
+  GENERAL is now a fixed OUT-OF-SCOPE REFUSAL (no LLM call at all for
+  that branch — a deliberate security boundary, changed 2026-08-27, see
+  Change Log) -> or RAG_REQUIRED -> rewrite -> retrieve -> generate ->
+  (answerable? verify : disclosed general-knowledge fallback). Persists
+  both the user message and the final reply to PostgreSQL
+  (`chat_sessions` / `messages`); `conversation_id` semantics unchanged
+  (session UUID, reuse to continue a session; omit or send `null` for a
+  new one — do NOT send Swagger's literal placeholder text `"string"`).
+  Response has a `citations` field (empty for GENERAL-refusal and
+  general-fallback replies — neither is sourced from documents).
+  **Verified live repeatedly**, most recently 2026-08-27: "what is 2+2"
+  -> fixed refusal (previously incorrectly answered "2+2=4"); "How many
+  casual leave days..." -> "7 days per annum." with a real citation;
+  "How many days of work-from-home leave..." (not in the ingested
+  document) -> disclosed general-knowledge answer instead of a bare
+  refusal. See Change Log for the full history (classify/rewrite/
+  retrieve/generate/verify was independently verified live 2026-08-26
+  via console-log call-sequence tracing).
+- `POST /api/v1/rag/ask` — unchanged by the graph work above; still
+  always-RAG, no classification/rewriting/verification/fallback,
+  matching `scripts.ask`. **Verified live repeatedly** across this
+  project (e.g. as part of the Documents API upload/ingest verification
+  2026-08-26, and directly during the "collection doesn't exist" auto-
+  ingest bug investigation the same day) — real hybrid search + rerank +
+  grounded answers against real ingested documents, not just unit tests.
 - `POST /api/v1/documents/upload`, `POST /api/v1/documents/{id}/ingest`,
   `GET /api/v1/documents`, `GET /api/v1/documents/{id}` — replaced
   auto-ingest-on-startup, see below. **Verified live 2026-08-26**
   (upload/ingest/force-reingest/list/get all confirmed, followed by a
   real grounded `/api/v1/chat` answer proving retrieval works off the
   new path). `DELETE /api/v1/documents/{id}` wired + unit-tested but not
-  yet live-verified (destructive, deferred).
+  yet live-verified (destructive, deferred until the user asks for it).
 - `POST /api/v1/admin/reset/postgres`, `/vector-store`, `/all` —
-  destructive dev-only data reset. **Not yet live-verified.**
+  destructive dev-only data reset, no auth. **Verified live 2026-08-26**
+  — real console log confirmed `DELETE FROM documents`/`chat_sessions`
+  (with row counts) and the Weaviate `DocumentChunk` collection being
+  deleted and recreated, run multiple times across this project as a
+  reset-between-tests step.
 
 **Database schema:** SQLAlchemy 2.x models exist for `chat_sessions`,
 `messages` (used by the chat endpoint), and `documents`,
@@ -94,14 +120,18 @@ ingestion phase, not yet built). No Alembic yet — tables are created
 directly via `python -m scripts.init_db` (`backend/scripts/init_db.py`),
 which must be re-run after adding new models.
 
-**Document ingestion pipeline (`backend/app/rag/ingestion/`):**
-standalone module, NOT wired to Weaviate/embeddings yet. Flow: validate
+**Document ingestion pipeline (`backend/app/rag/ingestion/`):** the
+extract/chunk/Postgres-write half (`pipeline.py`) is intentionally
+separate from the embed-into-Weaviate half (`embedder.py`) — see
+"Documents API" below for how they're now triggered explicitly via
+HTTP (upload, then ingest). Flow: validate
 file (must be `.pdf`, non-empty) → hash (sha256) → dedup check against
 `documents.content_hash` → `pypdf` text extraction per page →
 whitespace-only cleaning → fixed-size token chunking via `tiktoken`
 (`cl100k_base` encoding as a model-agnostic stand-in for BGE-M3's own
 tokenizer) at `CHUNK_SIZE_TOKENS`/`CHUNK_OVERLAP_TOKENS` (default
-600/100, `app/core/config.py`) → chunks written as JSON to
+100/20 as of 2026-08-26 — was 600/100 originally, changed at user
+request, `app/core/config.py`) → chunks written as JSON to
 `PROCESSED_DATA_DIR/<document_id>/v<version>.json` (default
 `data/processed/`) → `documents`/`document_versions` rows created/
 updated via `DocumentRepository`. Run via CLI:
@@ -201,11 +231,12 @@ sections 14, 15, 26) — implemented 2026-08-25, verified live 2026-08-26:**
 
 **Full LangGraph workflow (`backend/app/graph/`) — implemented
 2026-08-25, verified live 2026-08-26, extended 2026-08-26 with a
-disclosed general-knowledge fallback:** `build_graph(llm_client,
-weaviate_client)` in `workflow.py` compiles plan.md's pipeline plus one
-addition (see the Change Log entry below for why):
+disclosed general-knowledge fallback, extended again 2026-08-27 to
+refuse off-topic questions outright:** `build_graph(llm_client,
+weaviate_client)` in `workflow.py` compiles plan.md's pipeline plus two
+additions (see the Change Log entries below for why):
 ```
-START -> classify -> GENERAL -> llm -> END
+START -> classify -> GENERAL -> refuse (out of scope, no LLM call) -> END
                    -> RAG_REQUIRED -> rewrite -> retrieve (hybrid+rerank) -> generate -> [was_answerable?]
                                                                                 -> yes -> verify -> END
                                                                                 -> no  -> general_fallback -> END
@@ -223,9 +254,11 @@ against a scripted fake `LLMClient`): both branches produce the exact
 call sequence the graph's structure predicts — see the 2026-08-26
 Change Log entry for the full trace. The regenerate-vs-refuse fork on an
 UNSUPPORTED verdict has been exercised live too (see the `verify_answer`
-entry above). **The new `general_fallback` branch is NOT yet
-live-verified** — wired + unit-tested only so far (see the newer Change
-Log entry).
+entry above). **`general_fallback` confirmed live 2026-08-27** (the
+work-from-home-leave question — not in the ingested document — got a
+disclosed general-knowledge answer instead of a bare refusal). **The
+GENERAL branch's out-of-scope refusal (no LLM call) also confirmed live
+2026-08-27** ("what is 2+2" now refused instead of answered).
 
 **Auto-ingestion on startup — REMOVED 2026-08-26 (user request), replaced
 by an explicit Documents API.** It was implemented 2026-08-25 and later
@@ -275,20 +308,24 @@ anyway (7 chunks written, matching the original count); `GET
 report `is_embedded: true`; `POST /api/v1/chat` afterward returned a
 real grounded answer, proving the new upload/ingest path feeds retrieval
 exactly like the removed auto-ingest path did. `DELETE
-/api/v1/documents/{id}` and the admin reset endpoints below are still
-unverified live — destructive, deferred until the user is ready to
-test them specifically.
+/api/v1/documents/{id}` is still unverified live — destructive, deferred
+until the user asks for it. The admin reset endpoints below WERE later
+live-verified (see their own entry).
 
 **Admin reset endpoints (`backend/app/api/routes/admin.py`,
-`backend/app/services/admin_service.py`) — implemented 2026-08-26, NOT
-yet live-verified:** `POST /api/v1/admin/reset/postgres` deletes all
-`documents` (cascades to `document_versions`) and `chat_sessions`
-(cascades to `messages`) rows — does not touch Weaviate or disk files.
-`POST /api/v1/admin/reset/vector-store` deletes + recreates the
-`DocumentChunk` Weaviate collection — does not touch PostgreSQL.
-`POST /api/v1/admin/reset/all` runs both. No auth — this project has
-none yet; dev/test convenience only, documented as such in the README.
-Unit-tested with fakes (`tests/unit/test_admin_service.py`).
+`backend/app/services/admin_service.py`) — implemented 2026-08-26,
+verified live the same day:** `POST /api/v1/admin/reset/postgres`
+deletes all `documents` (cascades to `document_versions`) and
+`chat_sessions` (cascades to `messages`) rows — does not touch Weaviate
+or disk files. `POST /api/v1/admin/reset/vector-store` deletes +
+recreates the `DocumentChunk` Weaviate collection — does not touch
+PostgreSQL. `POST /api/v1/admin/reset/all` runs both. No auth — this
+project has none yet; dev/test convenience only, documented as such in
+the README. Unit-tested with fakes (`tests/unit/test_admin_service.py`)
+AND used repeatedly for real as a reset-between-tests step throughout
+this project (e.g. before the 100-token-chunking re-test, before the
+work-from-home-fallback re-test) — real console logs each time
+confirmed the delete/recreate actually happened, with row counts.
 
 **Architecture (must stay this shape):**
 ```
@@ -325,28 +362,36 @@ PDFs are simply not supported.)
 
 **HTTP endpoint for the RAG pipeline:** `POST /api/v1/rag/ask`
 (`backend/app/api/routes/rag.py` → `RagQueryService`
-(`backend/app/services/rag_service.py`)) now exposes the same
-retrieval → optional rerank → grounded-answer flow as `scripts.ask` over
-HTTP — the CLI-only gap noted above is closed. **Not yet verified live**
-(wired + unit-tested with fakes only — see Change Log entry below for
-exactly what has/hasn't been exercised against the real stack). The
-Weaviate client is opened once at app startup (`app.main`'s `lifespan`,
-stored on `app.state.weaviate_client`) rather than per request — a
-deliberate departure from the CLI scripts, which open/close a client per
-invocation; that pattern doesn't scale to a long-lived server process.
+(`backend/app/services/rag_service.py`)) exposes the same retrieval →
+optional rerank → grounded-answer flow as `scripts.ask` over HTTP — the
+CLI-only gap noted above is closed. **Verified live** (see "Working
+endpoints" above for the summary; wired + unit-tested with fakes too).
+The Weaviate client is opened once at app startup (`app.main`'s
+`lifespan`, stored on `app.state.weaviate_client`) rather than per
+request — a deliberate departure from the CLI scripts, which open/close
+a client per invocation; that pattern doesn't scale to a long-lived
+server process.
 
 **Key config:** `backend/app/core/config.py` (`Settings`) reads everything
 from env vars — `backend/.env` (local, gitignored) /
 `backend/.env.example` (committed template). Var names as of now:
 `ENVIRONMENT`, `POSTGRES_HOST/PORT/USER/PASSWORD/DB`,
-`WEAVIATE_HOST/PORT/GRPC_PORT`, `GROQ_API_KEY`, `GROQ_MODEL`.
-`GROQ_API_KEY` is now set in `backend/.env` (user's own key, not
-recorded anywhere in this log) and the live call is verified working.
+`WEAVIATE_HOST/PORT/GRPC_PORT`, `GROQ_API_KEY`/`GROQ_API_1`/`_2`/`_3`,
+`GROQ_MODEL`, `CHUNK_SIZE_TOKENS`(100)/`CHUNK_OVERLAP_TOKENS`(20),
+`DOCUMENTS_DIR`, `PROCESSED_DATA_DIR`. All 4 Groq keys are set in
+`backend/.env` (the user's own, not recorded anywhere in this log) —
+`GROQ_API_KEY` alone verified live 2026-08-25; the 3-key fallback added
+2026-08-26 is unit-tested but not yet exercised against a real rate
+limit.
 
 **Folders that exist but are intentionally empty scaffolding** (for later
 phases — do not fill them speculatively): `app/agents/`, `app/crew/`,
-`app/dspy/`, `app/mcp/`, `app/rag/`, `app/models/`, `app/observability/`,
-`mcp-servers/`, `frontend/`, most of `data/` and `docs/`.
+`app/dspy/`, `app/mcp/`, `app/observability/`, `mcp-servers/`,
+`frontend/`. (`app/rag/` and `app/models/` are NOT in this category
+anymore — both are now heavily used: `app/rag/` holds ingestion,
+retrieval, reranking, generation, classification, query rewriting, and
+embeddings; `app/models/` holds the actively-used `Document`/
+`DocumentVersion`/`ChatSession`/`Message` ORM models.)
 
 **Docker:** `docker-compose.yml` at repo root runs ONLY `postgres` +
 `weaviate`. The backend runs locally from `backend/.venv`, not in a
@@ -401,12 +446,12 @@ total (classification only) — proving the raw question was never
 forwarded for free-form answering, not just that the final text looks
 right.
 
-**Not yet live-verified** — next step: restart the app, re-ask "what is
-2+2" (previously answered "2+2=4") and confirm it now returns the fixed
-out-of-scope refusal instead; separately re-confirm a real company
-question (e.g. "how many casual leave days") still works normally,
-since `classify`/`rewrite`/`retrieve`/`generate`/`verify` are otherwise
-unchanged.
+**Confirmed live 2026-08-27:** "what is 2+2" now returns the fixed
+out-of-scope refusal (previously answered "2+2=4"). "How many casual
+leave days are employees entitled to?" still works normally — "7 days
+per annum." with a real citation (`Leave_Policy_1.pdf`, page 2) —
+confirming `classify`/`rewrite`/`retrieve`/`generate`/`verify` are
+otherwise unaffected by this change.
 
 ### 2026-08-26 — Disclosed general-knowledge fallback when a document doesn't cover a legitimate question
 **By:** Claude (Sonnet 5), this session.
