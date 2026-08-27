@@ -200,27 +200,32 @@ sections 14, 15, 26) — implemented 2026-08-25, verified live 2026-08-26:**
   simple (always-RAG, no rewriting/verification) — see their own entries.
 
 **Full LangGraph workflow (`backend/app/graph/`) — implemented
-2026-08-25, verified live 2026-08-26:** `build_graph(llm_client,
-weaviate_client)` in `workflow.py` compiles plan.md's actual pipeline
-(previously just a placeholder echo node, kept only to prove LangGraph
-compiled):
+2026-08-25, verified live 2026-08-26, extended 2026-08-26 with a
+disclosed general-knowledge fallback:** `build_graph(llm_client,
+weaviate_client)` in `workflow.py` compiles plan.md's pipeline plus one
+addition (see the Change Log entry below for why):
 ```
 START -> classify -> GENERAL -> llm -> END
-                   -> RAG_REQUIRED -> rewrite -> retrieve (hybrid+rerank) -> generate -> verify -> END
+                   -> RAG_REQUIRED -> rewrite -> retrieve (hybrid+rerank) -> generate -> [was_answerable?]
+                                                                                -> yes -> verify -> END
+                                                                                -> no  -> general_fallback -> END
 ```
 `GraphState` (`state.py`) carries `original_query`, `classification`,
-`rewritten_query`, `chunks`, `citations`, `answer`, `verified`,
-`response` — `initial_state(query)` builds a fully-populated starting
-dict so no node/caller ever hits a missing key on a path that skips some
-nodes (e.g. GENERAL never runs `retrieve`). Dependencies (LLM client,
-Weaviate client) are captured via closures built inside `build_graph()`,
-not threaded through state. This graph drives `POST /api/v1/chat` (see
-above). **Confirmed live via the actual console log** (not just unit
-tests against a scripted fake `LLMClient`): both branches produce the
-exact call sequence the graph's structure predicts — see the Change Log
-entry for the full trace. The regenerate-vs-refuse fork on an
-UNSUPPORTED verdict has only been exercised by unit test so far, not
-live (no real answer has failed verification yet in testing).
+`rewritten_query`, `chunks`, `citations`, `answer`, `was_answerable`,
+`verified`, `response` — `initial_state(query)` builds a fully-populated
+starting dict so no node/caller ever hits a missing key on a path that
+skips some nodes (e.g. GENERAL never runs `retrieve`). Dependencies (LLM
+client, Weaviate client) are captured via closures built inside
+`build_graph()`, not threaded through state. This graph drives `POST
+/api/v1/chat` (see above). **Original classify/rewrite/retrieve/verify
+flow confirmed live via the actual console log** (not just unit tests
+against a scripted fake `LLMClient`): both branches produce the exact
+call sequence the graph's structure predicts — see the 2026-08-26
+Change Log entry for the full trace. The regenerate-vs-refuse fork on an
+UNSUPPORTED verdict has been exercised live too (see the `verify_answer`
+entry above). **The new `general_fallback` branch is NOT yet
+live-verified** — wired + unit-tested only so far (see the newer Change
+Log entry).
 
 **Auto-ingestion on startup — REMOVED 2026-08-26 (user request), replaced
 by an explicit Documents API.** It was implemented 2026-08-25 and later
@@ -355,6 +360,148 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 ---
 
 ## Change Log (newest first)
+
+### 2026-08-27 — GENERAL-classified (off-topic) questions now refused outright, not answered
+**By:** Claude (Sonnet 5), this session.
+**Why:** Immediately after confirming the general-knowledge fallback
+above (which legitimately lets a company-relevant-but-uncovered
+question get a general-knowledge answer), user raised a real security
+concern from the other direction: `general_node` was still answering
+ANY classified-GENERAL query directly via an unconstrained LLM call —
+math, coding, unrelated trivia, anything — because that was the
+pre-existing behavior from when the graph was first built (verified
+live 2026-08-26 as "What is 2+2?" → GENERAL → answered). That's an open
+surface: a raw user message handed to an LLM with no scoping is exactly
+the kind of thing that invites abuse (turning the bot into a free
+general-purpose assistant, prompt injection attempts, etc.), and this
+bot is meant to answer company-policy questions only.
+
+Distinguished clearly (these are NOT the same thing, despite both
+involving "general knowledge"): `general` (classify said GENERAL — the
+question is unrelated to the company) vs. `general_fallback` (classify
+said RAG_REQUIRED — i.e. plausibly company-relevant — but retrieval
+found nothing). Only the latter should ever call the LLM with no
+retrieved context; the former should refuse before any such call.
+
+Changed `backend/app/graph/workflow.py`: `general_node` no longer calls
+`llm_client.generate_reply()` at all — it returns a fixed
+`_OUT_OF_SCOPE_ANSWER` ("I'm a support assistant for our company's
+policies and documents — I can only help with questions related to
+that...") unconditionally. The `classify` LLM call itself is unchanged
+(it still sees the raw question, but only to output one word —
+GENERAL/RAG_REQUIRED — not to answer it). Module docstring and
+`README.md`'s "The full RAG workflow" section rewritten to explain the
+`general` vs. `general_fallback` distinction explicitly, since the two
+now behave oppositely (refuse vs. answer) despite superficially similar
+wiring.
+
+Updated `tests/unit/test_graph.py`'s GENERAL-branch test: now asserts
+the fixed refusal message, AND asserts exactly one LLM call happened
+total (classification only) — proving the raw question was never
+forwarded for free-form answering, not just that the final text looks
+right.
+
+**Not yet live-verified** — next step: restart the app, re-ask "what is
+2+2" (previously answered "2+2=4") and confirm it now returns the fixed
+out-of-scope refusal instead; separately re-confirm a real company
+question (e.g. "how many casual leave days") still works normally,
+since `classify`/`rewrite`/`retrieve`/`generate`/`verify` are otherwise
+unchanged.
+
+### 2026-08-26 — Disclosed general-knowledge fallback when a document doesn't cover a legitimate question
+**By:** Claude (Sonnet 5), this session.
+**Why:** User reported: asking a plausible policy question the ingested
+document doesn't actually cover (e.g. "How many days of work-from-home
+leave can an employee take?" against a leave policy PDF that never
+mentions WFH) got a bare refusal ("...that detail could not be found in
+the given context."). They want it to instead answer from general
+knowledge AND clearly disclose that the answer isn't sourced from the
+documents. They were explicit this must stay narrowly scoped for
+security reasons — it must NOT become a way to route arbitrary
+off-topic trivia ("what is 2+2", "what does Amazon do") around
+retrieval; that boundary already exists (`classify_query()` routes
+those to `GENERAL` before retrieval is even attempted, unchanged by
+this work) and this fallback only applies *inside* the RAG_REQUIRED
+branch, after retrieval/generation already ran and found nothing
+relevant. Also confirmed query rewriting was already fully implemented
+and wired in (`app/rag/query_rewriting.py`, `rewrite -> retrieve` edge)
+— no code change needed for that part, just noted it's already done.
+
+Changed:
+- `backend/app/rag/generation/answer_generator.py` — grounded-answer
+  prompt now instructs the LLM to reply with an exact sentinel token
+  (`NOT_FOUND_IN_CONTEXT`) when the context doesn't answer the question,
+  instead of free-form refusal prose (which was previously undetectable
+  programmatically — the earlier version just returned whatever the LLM
+  said, with no reliable way to tell "this was a real refusal" from "the
+  answer happens to be short"). A substring check (not exact-match, since
+  an LLM won't always reproduce a full sentence byte-for-byte) sets
+  `RAGAnswer.was_answerable=False` and normalizes the answer back to the
+  existing `_NO_CONTEXT_ANSWER` text either way — same behavior as the
+  existing zero-chunks case, now also covering "chunks were retrieved but
+  none of them actually answer this."
+- `backend/app/graph/state.py` — `GraphState` gained `was_answerable:
+  bool | None`.
+- `backend/app/graph/workflow.py` — new `general_fallback` node: calls
+  `llm_client.generate_reply(original_query)` with no retrieved context
+  (a plain general-knowledge call) and prefixes the reply with a fixed
+  disclosure sentence before returning it as `response`; `citations`
+  stays empty (nothing here is sourced). New conditional edge after
+  `generate`: `was_answerable=True` -> `verify` (unchanged path),
+  `was_answerable=False` -> `general_fallback` (new). `verify_node`
+  simplified — it no longer needs its own "chunks might be empty"
+  special case, since that's now handled entirely by the routing
+  decision before it's ever reached. The UNSUPPORTED-verdict refusal
+  path in `verify_node` is deliberately UNCHANGED (still a hard refusal,
+  not a general-knowledge fallback) — an answer that looked grounded but
+  couldn't be verified is a hallucination risk, a different failure mode
+  than "the documents don't cover this at all," and conflating the two
+  would be more dangerous, not less.
+- `backend/README.md` — updated "The full RAG workflow (LangGraph)"
+  section with the new branch and the security-boundary explanation;
+  updated the `/api/v1/chat` endpoint description.
+- Tests: `tests/unit/test_answer_generator.py` gained a case for the
+  sentinel-detection path; `tests/unit/test_graph.py`'s old
+  "no-Weaviate-client returns refusal" test was rewritten (it now
+  expects the disclosed general-fallback response instead of a bare
+  refusal) and a new test covers the realistic case — chunks ARE
+  retrieved, but the LLM correctly emits the sentinel because none of
+  them answer the question, and the graph still routes to
+  `general_fallback`.
+
+**Fixed after user ran the suite:** `tests/unit/test_rag_service.py`'s
+`_FakeLLMClient` echoed the entire prompt back
+(`f"answer to: {message}"`) — since the grounded-answer prompt itself
+now names the sentinel in its own instructions
+("...respond with EXACTLY the single word NOT_FOUND_IN_CONTEXT..."),
+echoing it back made every reply falsely contain the sentinel,
+tripping `was_answerable=False` on tests that expected a normal
+grounded answer (2 failures: `test_ask_returns_grounded_answer_with_
+citations`, `test_ask_without_rerank_never_loads_the_reranker`). Fixed
+by having the fake return a fixed realistic answer instead of echoing.
+Confirmed no other test fake echoes its input the same way (`grep`
+swept for the pattern). **Latent, not-yet-acted-on note:** production
+`StubLLMClient` (`app/llm/base.py`) has the same echo shape (`f"Echo:
+{message}"`) — using it (no `GROQ_API_KEY`/`GROQ_API_1-3` configured)
+for a RAG_REQUIRED question would echo the sentinel-naming instructions
+back and always report `was_answerable=False`, always taking the
+general_fallback branch. This is a variation on an already-documented,
+accepted limitation ("classification/rewriting/verification against
+the echo stub will behave oddly since it doesn't understand the
+prompts — fine for proving the flow wires together, not for real
+answers") — not fixed here since the stub was never meant to produce
+real answers in the first place, but noting the specific new shape of
+"odd" in case it's confusing later.
+
+Full suite re-run by the user after the fix: **75 passed.**
+
+**Confirmed live 2026-08-27:** re-asked the exact work-from-home-leave
+question from the report — response now starts with "This question
+isn't covered by our available documents, so here is a
+general-knowledge answer instead..." followed by a real answer, instead
+of the bare refusal. Separately confirmed "what is 2+2" still classifies
+GENERAL and answers directly with empty citations, never touching
+retrieval or this new branch — the security boundary holds.
 
 ### 2026-08-26 — Multiple Groq API keys with automatic rate-limit fallback
 **By:** Claude (Sonnet 5), this session.

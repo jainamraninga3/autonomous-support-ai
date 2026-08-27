@@ -18,6 +18,7 @@ class GraphState(TypedDict):
     chunks: list[Any]
     citations: list[Any]
     answer: str | None
+    was_answerable: bool | None
     verified: bool | None
     response: str | None
 
@@ -37,6 +38,7 @@ def initial_state(query: str) -> GraphState:
         chunks=[],
         citations=[],
         answer=None,
+        was_answerable=None,
         verified=None,
         response=None,
     )

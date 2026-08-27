@@ -204,24 +204,52 @@ this router anywhere with real users.
 pipeline:
 
 ```
-START -> classify -> GENERAL -> llm -> END
-                   -> RAG_REQUIRED -> rewrite -> retrieve (hybrid + rerank) -> generate -> verify -> END
+START -> classify -> GENERAL -> refuse (out of scope) -> END
+                   -> RAG_REQUIRED -> rewrite -> retrieve (hybrid + rerank) -> generate -> [was_answerable?]
+                                                                                   -> yes -> verify -> END
+                                                                                   -> no  -> general_fallback -> END
 ```
 
 - **Classify** (`app/rag/classification.py`) — an LLM call decides
   GENERAL vs. RAG_REQUIRED. Defaults to RAG_REQUIRED on any ambiguous
-  reply (an unnecessary retrieval is cheaper than a skipped one).
+  reply (an unnecessary retrieval is cheaper than a skipped one). A
+  GENERAL classification (off-topic — math, coding, general trivia,
+  "what is 2+2", "what does Amazon do") is refused outright with a fixed
+  message ("I'm a support assistant for our company's policies and
+  documents...") — this bot only answers company-related questions.
+  **The raw user message is never handed to the LLM to answer freely on
+  this path** — a deliberate security boundary, not just a UX choice: it
+  closes off the obvious way a user could otherwise turn this into a
+  general-purpose assistant or attempt a prompt injection through an
+  unconstrained "answer anything" call.
 - **Rewrite** (`app/rag/query_rewriting.py`) — improves the query for
   retrieval while preserving its meaning; the *original* question (not
   the rewrite) is what's used to generate the final answer, per plan.md
   section 17. Falls back to the original query if the rewrite looks
   unreliable (empty, or suspiciously long).
 - **Retrieve/generate** — the same hybrid search → rerank → grounded
-  answer generation already used by `scripts.ask`/`/api/v1/rag/ask`.
-- **Verify** (`app/rag/generation/verification.py`) — an LLM call checks
-  whether the generated answer is actually supported by the retrieved
-  context. An unsupported verdict replaces the answer with a refusal
-  message rather than returning it as-is.
+  answer generation already used by `scripts.ask`/`/api/v1/rag/ask`. The
+  grounded-answer prompt instructs the LLM to reply with an exact
+  sentinel token when the retrieved context doesn't actually answer the
+  question; `generate_answer()` detects that (or zero chunks retrieved
+  at all) and reports `was_answerable=False`.
+- **General fallback** (only reached when `was_answerable=False`) —
+  answers from the LLM's own general knowledge instead of just refusing,
+  but always prefixes the reply making that explicit ("This question
+  isn't covered by our available documents, so here is a
+  general-knowledge answer instead..."). `citations` stays empty (there
+  is no source). This is narrower than it might sound: it only ever
+  runs for a question `classify` already judged RAG_REQUIRED — it is
+  not a way to route arbitrary trivia around retrieval, since
+  `classify` already sent that elsewhere.
+- **Verify** (`app/rag/generation/verification.py`, only reached when
+  `was_answerable=True`) — an LLM call checks whether the generated
+  answer is actually supported by the retrieved context. An unsupported
+  verdict replaces the answer with a refusal message rather than
+  returning it as-is — this path stays a hard refusal (not a
+  general-knowledge fallback) since an answer that looked grounded but
+  couldn't be verified is a hallucination risk, not a "not in our
+  documents" case.
 
 `POST /api/v1/chat` now runs this graph (see Endpoints below) instead of
 calling the LLM directly.
@@ -230,8 +258,9 @@ calling the LLM directly.
 
 - `GET /health` — service, database, and vector store status
 - `POST /api/v1/chat` — runs the full LangGraph workflow above (classify
-  → general reply, or rewrite → retrieve → generate → verify), persisted
-  to `chat_sessions` / `messages` in PostgreSQL. Body:
+  → refusal (off-topic), or rewrite → retrieve → generate →
+  verify/general fallback), persisted to `chat_sessions` / `messages`
+  in PostgreSQL. Body:
   `{"message": "...", "conversation_id": null}`. Returns
   `{"reply": "...", "conversation_id": "...", "citations": [...]}` —
   `citations` is empty for a general (non-RAG) reply. Uses Groq

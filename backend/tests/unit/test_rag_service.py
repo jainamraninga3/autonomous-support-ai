@@ -58,8 +58,13 @@ class _FakeWeaviateClient:
 
 
 class _FakeLLMClient:
+    """Returns a fixed, realistic-looking answer rather than echoing
+    `message` — echoing would include the grounded-answer prompt's own
+    instruction text (which mentions the NOT_FOUND_IN_CONTEXT sentinel
+    by name) in the reply, falsely tripping `was_answerable` detection."""
+
     async def generate_reply(self, message: str) -> str:
-        return f"answer to: {message}"
+        return "Employees are entitled to 20 days of annual leave. [Source 1]"
 
 
 class _FakeEmbedder:
@@ -117,7 +122,7 @@ async def test_ask_returns_grounded_answer_with_citations(monkeypatch) -> None:
     result = await service.ask("what is the leave policy?", do_rerank=True, top_k=5)
 
     assert result.was_answerable is True
-    assert result.answer.startswith("answer to:")
+    assert result.answer == "Employees are entitled to 20 days of annual leave. [Source 1]"
     assert len(result.citations) == 1
     assert result.citations[0].document_name == "policy.pdf"
 

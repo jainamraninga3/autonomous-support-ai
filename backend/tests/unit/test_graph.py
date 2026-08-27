@@ -107,16 +107,25 @@ class _ScriptedLLMClient(LLMClient):
 
 
 @pytest.mark.asyncio
-async def test_general_query_skips_retrieval_entirely() -> None:
+async def test_general_query_is_refused_without_calling_the_llm_to_answer_it() -> None:
+    """A classified-GENERAL query (off-topic — math, coding, general
+    trivia) must be refused with a fixed message, not answered — and the
+    raw user message must never be handed to the LLM for free-form
+    answering (a real security boundary, not just a UX choice: it closes
+    off a path a user could otherwise use to make the bot answer
+    anything, or attempt a prompt injection)."""
     llm = _ScriptedLLMClient({"GENERAL or RAG_REQUIRED": "GENERAL"})
     graph = build_graph(llm_client=llm, weaviate_client=None)
 
     result = await graph.ainvoke(initial_state("what is 2 + 2?"))
 
     assert result["classification"] == "GENERAL"
-    assert result["response"] == "a general reply"
+    assert "I can only help" in result["response"]
     assert result["chunks"] == []
     assert result["citations"] == []
+    # Exactly one LLM call happened (classification) — no second call was
+    # made asking the LLM to freely answer the raw question.
+    assert len(llm.calls) == 1
 
 
 @pytest.mark.asyncio
@@ -167,12 +176,49 @@ async def test_rag_query_with_unsupported_answer_returns_the_refusal(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_rag_query_with_no_weaviate_client_returns_not_found_without_crashing() -> None:
-    llm = _ScriptedLLMClient({"GENERAL or RAG_REQUIRED": "RAG_REQUIRED", "Rewritten query:": "rewritten query"})
+async def test_rag_query_with_no_weaviate_client_falls_back_to_disclosed_general_answer() -> None:
+    llm = _ScriptedLLMClient(
+        {"GENERAL or RAG_REQUIRED": "RAG_REQUIRED", "Rewritten query:": "rewritten query"},
+        default="a general-knowledge reply",
+    )
     graph = build_graph(llm_client=llm, weaviate_client=None)
 
     result = await graph.ainvoke(initial_state("how many leave days do employees get?"))
 
     assert result["chunks"] == []
-    assert result["verified"] is False
-    assert "does not contain an answer" in result["response"]
+    assert result["was_answerable"] is False
+    assert result["verified"] is None
+    assert result["citations"] == []
+    assert "isn't covered by our available documents" in result["response"]
+    assert "a general-knowledge reply" in result["response"]
+
+
+@pytest.mark.asyncio
+async def test_rag_query_where_llm_says_not_found_in_context_falls_back_to_general(monkeypatch) -> None:
+    """The real-world case this feature targets: retrieval DOES find
+    chunks (e.g. a leave-policy document is ingested), but they don't
+    actually cover the asked question (e.g. work-from-home leave isn't
+    in that document) — the grounded-answer LLM call correctly emits the
+    NOT_FOUND_IN_CONTEXT sentinel, and the graph should route to a
+    disclosed general-knowledge answer rather than a bare refusal."""
+    monkeypatch.setattr("app.graph.workflow.get_embedder", lambda: _FakeEmbedder())
+    monkeypatch.setattr("app.graph.workflow.get_reranker", lambda: _FakeReranker())
+
+    llm = _ScriptedLLMClient(
+        {
+            "GENERAL or RAG_REQUIRED": "RAG_REQUIRED",
+            "Rewritten query:": "rewritten wfh leave question",
+            "NOT_FOUND_IN_CONTEXT": "NOT_FOUND_IN_CONTEXT",
+        },
+        default="Most companies allow 2-3 WFH days per week.",
+    )
+    weaviate_client = _FakeWeaviateClient(objects=[_fake_object(0, 0.9)])
+    graph = build_graph(llm_client=llm, weaviate_client=weaviate_client)
+
+    result = await graph.ainvoke(initial_state("how many work-from-home leave days can I take?"))
+
+    assert result["was_answerable"] is False
+    assert result["verified"] is None
+    assert result["citations"] == []
+    assert "isn't covered by our available documents" in result["response"]
+    assert "Most companies allow 2-3 WFH days per week." in result["response"]

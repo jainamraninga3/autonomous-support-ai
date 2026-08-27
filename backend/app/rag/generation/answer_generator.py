@@ -23,11 +23,19 @@ logger = get_logger(__name__)
 
 _NO_CONTEXT_ANSWER = "The available information does not contain an answer to this question."
 
+# A deterministic, easy-to-reproduce token rather than requiring the LLM
+# to reproduce a full sentence verbatim (unreliable) — `was_answerable`
+# below is a substring check against this, not an exact-string match.
+# Callers (the graph's generate->verify/general_fallback routing) use
+# `was_answerable=False` as the signal to fall back to a disclosed
+# general-knowledge answer instead of just refusing outright.
+_NO_CONTEXT_SENTINEL = "NOT_FOUND_IN_CONTEXT"
+
 _GROUNDED_ANSWER_PROMPT = """You are a support assistant. Answer the user's question using ONLY the context below.
 
 Rules:
 - Do not invent information that is not present in the context.
-- If the context does not contain enough information, clearly state that the information could not be found.
+- If the context does not contain enough information to answer the question, respond with EXACTLY the single word {sentinel} and nothing else — no explanation, no apology.
 - Do not use external knowledge unless explicitly allowed.
 - Preserve important numbers, dates, names, and conditions exactly as given in the context.
 - You may refer to sources by their [Source N] label; do not invent page numbers or source names.
@@ -64,7 +72,10 @@ async def generate_answer(query: str, chunks: list[RetrievedChunk], llm_client: 
 
     context = build_context(chunks)
     citations = build_citations(chunks)
-    prompt = _GROUNDED_ANSWER_PROMPT.format(context=context, query=query)
+    prompt = _GROUNDED_ANSWER_PROMPT.format(context=context, query=query, sentinel=_NO_CONTEXT_SENTINEL)
 
     answer_text = await llm_client.generate_reply(prompt)
+    if _NO_CONTEXT_SENTINEL in answer_text:
+        logger.info("Retrieved chunks did not contain an answer for this query")
+        return RAGAnswer(answer=_NO_CONTEXT_ANSWER, citations=[], was_answerable=False)
     return RAGAnswer(answer=answer_text, citations=citations, was_answerable=True)

@@ -61,3 +61,18 @@ async def test_generate_answer_skips_llm_call_when_no_chunks() -> None:
     assert result.was_answerable is False
     assert result.citations == []
     assert llm.last_prompt is None  # LLM was never called
+
+
+@pytest.mark.asyncio
+async def test_generate_answer_not_answerable_when_llm_reports_not_found_in_context() -> None:
+    """Chunks WERE retrieved, but the LLM correctly determined they don't
+    answer the question and emitted the sentinel per the prompt's
+    instructions — `was_answerable=False` is the signal the graph uses
+    to fall back to a disclosed general-knowledge answer instead of a
+    bare refusal."""
+    llm = _FakeLLMClient(reply="NOT_FOUND_IN_CONTEXT")
+    result = await generate_answer("What is the WFH leave policy?", [_chunk()], llm)
+
+    assert result.was_answerable is False
+    assert result.citations == []
+    assert result.answer == "The available information does not contain an answer to this question."
