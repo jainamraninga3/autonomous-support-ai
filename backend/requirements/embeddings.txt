@@ -1,9 +1,0 @@
-# Optional — NOT installed by default (not included from base.txt/dev.txt).
-#
-# Needed only to actually run `scripts.embed_document` / `app/rag/embeddings.py`
-# for real. Installing this pulls in `torch` (large) and, on first use,
-# downloads the BAAI/bge-m3 model weights (~2.3GB).
-#
-# Install explicitly when ready:
-#   pip install -r requirements/embeddings.txt
-sentence-transformers==3.3.1

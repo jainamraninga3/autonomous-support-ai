@@ -8,7 +8,6 @@ needs BGE-M3 + a reachable Weaviate. A caller uploads a PDF, gets back its
 it's ready to.
 """
 
-from pathlib import Path
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,21 +25,6 @@ from app.repositories.document_repository import DocumentRepository
 logger = get_logger(__name__)
 
 
-def _unique_destination(dest_dir: Path, filename: str) -> Path:
-    """Avoid clobbering an unrelated file that happens to share a name —
-    content-hash dedup in `ingest_pdf` handles the "same file uploaded
-    twice" case regardless of what it's named on disk."""
-    dest = dest_dir / filename
-    if not dest.exists():
-        return dest
-    stem, suffix = Path(filename).stem, Path(filename).suffix
-    counter = 1
-    while dest.exists():
-        dest = dest_dir / f"{stem}_{counter}{suffix}"
-        counter += 1
-    return dest
-
-
 class DocumentService:
     def __init__(self, session: AsyncSession, weaviate_client, session_factory) -> None:
         self.session = session
@@ -53,19 +37,15 @@ class DocumentService:
         self.repository = DocumentRepository(session=session)
 
     async def upload(self, file_bytes: bytes, filename: str) -> IngestionResult:
-        if not filename.lower().endswith(".pdf"):
-            raise BadRequestError(f"Only PDF files are supported, got: {filename}")
-        if not file_bytes:
-            raise BadRequestError("Uploaded file is empty.")
+        """Extract, chunk, and persist a PDF — entirely in PostgreSQL.
 
-        settings = get_settings()
-        documents_dir = Path(settings.DOCUMENTS_DIR)
-        documents_dir.mkdir(parents=True, exist_ok=True)
-        destination = _unique_destination(documents_dir, filename)
-        destination.write_bytes(file_bytes)
-
+        The uploaded bytes are never written to disk: they go into the
+        document version row alongside the chunks derived from them, so
+        there is no filesystem state to lose or to get out of sync with
+        the database.
+        """
         try:
-            return await ingest_pdf(destination, session=self.session)
+            return await ingest_pdf(file_bytes, filename, session=self.session)
         except IngestionError as exc:
             raise BadRequestError(str(exc)) from exc
 
@@ -112,10 +92,5 @@ class DocumentService:
         if self.weaviate_client is not None and self.weaviate_client.collections.exists(CHUNK_COLLECTION_NAME):
             collection = self.weaviate_client.collections.get(CHUNK_COLLECTION_NAME)
             collection.data.delete_many(where=Filter.by_property("document_id").equal(str(document_id)))
-
-        for version in document.versions:
-            storage_path = Path(version.storage_path)
-            if storage_path.exists():
-                storage_path.unlink()
 
         await self.repository.delete_document(document)

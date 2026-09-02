@@ -31,7 +31,7 @@ class DocumentIngestResponse(BaseModel):
 class DocumentVersionInfo(BaseModel):
     version: int
     is_active: bool
-    storage_path: str
+    page_count: int
     is_embedded: bool
 
 

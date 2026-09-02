@@ -14,7 +14,7 @@ version of the old one.
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
-from app.models.document import Document, DocumentVersion
+from app.models.document import Document, DocumentChunk, DocumentVersion
 from app.repositories.base import BaseRepository
 
 
@@ -77,7 +77,38 @@ class DocumentRepository(BaseRepository[Document]):
         latest = result.scalar_one_or_none()
         return (latest or 0) + 1
 
-    async def create_version(self, document_id, version: int, storage_path: str) -> DocumentVersion:
+    async def create_chunks(self, document_version_id, chunks: list[dict]) -> int:
+        """Persist a version's chunks. `chunks` are dicts as produced by
+        `dataclasses.asdict(Chunk)` — the pipeline's own shape, so the
+        caller doesn't have to translate."""
+        self.session.add_all(
+            [
+                DocumentChunk(
+                    document_version_id=document_version_id,
+                    chunk_index=chunk["index"],
+                    text=chunk["text"],
+                    token_count=chunk["token_count"],
+                    start_page=chunk["start_page"],
+                    end_page=chunk["end_page"],
+                )
+                for chunk in chunks
+            ]
+        )
+        await self.session.flush()
+        return len(chunks)
+
+    async def get_chunks(self, document_version_id) -> list[DocumentChunk]:
+        """A version's chunks in document order."""
+        result = await self.session.execute(
+            select(DocumentChunk)
+            .where(DocumentChunk.document_version_id == document_version_id)
+            .order_by(DocumentChunk.chunk_index)
+        )
+        return list(result.scalars().all())
+
+    async def create_version(
+        self, document_id, version: int, pdf_bytes: bytes, page_count: int
+    ) -> DocumentVersion:
         """Create a new version and deactivate any previously active one."""
         await self.session.execute(
             DocumentVersion.__table__.update()
@@ -88,7 +119,8 @@ class DocumentRepository(BaseRepository[Document]):
             document_id=document_id,
             version=version,
             is_active=True,
-            storage_path=storage_path,
+            pdf_bytes=pdf_bytes,
+            page_count=page_count,
         )
         self.session.add(doc_version)
         await self.session.flush()

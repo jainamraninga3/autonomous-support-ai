@@ -163,3 +163,32 @@ async def test_ask_with_no_matching_chunks_skips_llm_and_reports_unanswerable(mo
 
     assert result.was_answerable is False
     assert result.citations == []
+
+
+@pytest.mark.asyncio
+async def test_rerank_defaults_to_the_app_setting_not_to_true(monkeypatch) -> None:
+    """`do_rerank=None` must follow RERANK_ENABLED, not silently rerank.
+
+    This defaulted to True, so one call to /api/v1/rag/ask downloaded the
+    ~2.3GB reranker model and added tens of seconds per query even with
+    RERANK_ENABLED=false everywhere else — two contradictory defaults for
+    one feature.
+    """
+    from app.core.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "RERANK_ENABLED", False)
+    monkeypatch.setattr("app.services.rag_service.get_embedder", lambda: _FakeEmbedder())
+
+    def _boom():
+        raise AssertionError("reranker must not load when RERANK_ENABLED is False")
+
+    monkeypatch.setattr("app.services.rag_service.get_reranker", _boom)
+
+    service = RagQueryService(
+        weaviate_client=_FakeWeaviateClient(objects=[_fake_object(0, 0.9)]),
+        llm_client=_FakeLLMClient(),
+    )
+
+    result = await service.ask("how many leave days do employees get?")
+
+    assert result.answer

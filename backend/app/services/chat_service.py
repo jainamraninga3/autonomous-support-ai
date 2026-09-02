@@ -73,4 +73,9 @@ class ChatService:
             conversation_id=str(chat_session.id),
             citations=citations,
             rewritten_query=result.get("rewritten_query"),
+            english_query=result.get("english_query"),
+            retrieved_chunk_count=len(result.get("chunks") or []),
+            verified=result.get("verified"),
+            verification_reason=result.get("verification_reason"),
+            answer_source=result.get("answer_source"),
         )

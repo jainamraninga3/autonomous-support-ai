@@ -135,9 +135,17 @@ def compute_precision_recall(citations, question_entry, k=None):
         return None
 
     retrieved_at_k = retrieved[:k]
+    # Precision: fraction of the top-k retrieved items that are relevant.
     hits = sum(1 for item in retrieved_at_k if item in relevant)
     precision_at_k = round(hits / len(retrieved_at_k), 3) if retrieved_at_k else 0.0
-    recall_at_k = round(hits / len(relevant), 3) if relevant else None
+    # Recall: fraction of the DISTINCT relevant items found at least once
+    # in the top-k. Using raw `hits` here would overcount for document-
+    # level ground truth (e.g. 10 chunks all from the same 1 relevant
+    # document would wrongly give hits=10, recall=10/1=10.0). Counting
+    # distinct relevant items actually retrieved keeps recall in [0, 1]
+    # for both chunk-level and document-level ground truth.
+    distinct_hits = len(relevant & set(retrieved_at_k))
+    recall_at_k = round(distinct_hits / len(relevant), 3) if relevant else None
 
     return {
         "k": k,
@@ -150,11 +158,19 @@ def compute_precision_recall(citations, question_entry, k=None):
     }
 
 
-def check_robustness(question_entry, answer_text, citations):
+def check_robustness(question_entry, answer_text, citations, answer_source=None):
     """Verify (not assume) that the backend's classify/refuse/fallback
     rules actually fired the way `expected_type` in questions.json says
     they should. Skipped (checked=False) if `expected_type` is absent —
-    never grades a question nobody labeled."""
+    never grades a question nobody labeled.
+
+    Prefers the backend's own `answer_source` field ('off_topic_refusal' /
+    'rag' / 'general_fallback', added to /api/v1/chat's response) when
+    present — an explicit, structured signal rather than string-matching
+    the reply text. Falls back to matching the two fixed marker strings
+    (OUT_OF_SCOPE_MARKER / GENERAL_FALLBACK_MARKER) only if answer_source
+    is missing, e.g. against an older backend that predates that field.
+    """
     expected = question_entry.get("expected_type")
     if not expected:
         return {
@@ -166,21 +182,30 @@ def check_robustness(question_entry, answer_text, citations):
 
     answer_text = answer_text or ""
     has_citations = bool(citations)
-    has_out_of_scope_marker = config.OUT_OF_SCOPE_MARKER in answer_text
-    has_fallback_marker = config.GENERAL_FALLBACK_MARKER in answer_text
+
+    if answer_source is not None:
+        is_off_topic = answer_source == "off_topic_refusal"
+        is_fallback = answer_source == "general_fallback"
+        is_rag = answer_source == "rag"
+        check_basis = "answer_source"
+    else:
+        is_off_topic = config.OUT_OF_SCOPE_MARKER in answer_text
+        is_fallback = config.GENERAL_FALLBACK_MARKER in answer_text
+        is_rag = not is_off_topic and not is_fallback
+        check_basis = "marker_text_match (no answer_source in response — older backend?)"
 
     if expected == "off_topic":
-        passed = has_out_of_scope_marker and not has_citations
+        passed = is_off_topic and not has_citations
         detail = "off-topic refusal fired correctly" if passed else (
             "expected the fixed out-of-scope refusal with no citations — did not get it"
         )
     elif expected == "uncovered":
-        passed = has_fallback_marker and not has_citations
+        passed = is_fallback and not has_citations
         detail = "disclosed general-knowledge fallback fired correctly" if passed else (
             "expected the disclosed general-knowledge fallback with no citations — did not get it"
         )
     elif expected == "covered":
-        passed = has_citations and not has_out_of_scope_marker and not has_fallback_marker
+        passed = has_citations and is_rag
         detail = "grounded, cited answer as expected" if passed else (
             "expected a grounded answer with real citations — did not get it"
         )
@@ -191,7 +216,7 @@ def check_robustness(question_entry, answer_text, citations):
             "note": f"Unknown expected_type {expected!r} — use 'off_topic', 'uncovered', or 'covered'.",
         }
 
-    return {"expected_type": expected, "checked": True, "passed": passed, "detail": detail}
+    return {"expected_type": expected, "checked": True, "passed": passed, "detail": detail, "check_basis": check_basis}
 
 
 def load_questions():
@@ -204,6 +229,13 @@ def load_questions():
     if not questions:
         print(f"No questions found in {config.INPUT_FILE}")
         sys.exit(1)
+    if config.RETEST_ONLY_IDS:
+        wanted = set(config.RETEST_ONLY_IDS)
+        questions = [q for q in questions if q.get("id") in wanted]
+        print(f"RETEST_ONLY_IDS set — filtering to {len(questions)} question(s): {sorted(wanted)}")
+        if not questions:
+            print(f"None of the requested ids {sorted(wanted)} were found in {config.INPUT_FILE}")
+            sys.exit(1)
     return questions
 
 
@@ -300,8 +332,12 @@ def call_rag_ask_api(question_text, variant):
     return _post_json(config.RAG_ASK_API_URL, payload)
 
 
-def evaluate_with_llm(groq_client, question_text, answer, citations, response_time_seconds):
-    """Ask the Groq judge model to score one answer. Returns (evaluation_dict, eval_time_seconds, error)."""
+def evaluate_with_llm(groq_clients, question_text, answer, citations, response_time_seconds):
+    """Ask the Groq judge model to score one answer. Tries each client in
+    `groq_clients` in order, falling through to the next on a rate-limit
+    (429) error — same idea as the backend's own multi-key fallback, so
+    one exhausted key doesn't stop every question from being judged.
+    Returns (evaluation_dict, eval_time_seconds, error)."""
     user_prompt = json.dumps(
         {
             "question": question_text,
@@ -314,28 +350,34 @@ def evaluate_with_llm(groq_client, question_text, answer, citations, response_ti
     )
 
     started = time.perf_counter()
-    try:
-        completion = groq_client.chat.completions.create(
-            model=config.GROQ_MODEL,
-            messages=[
-                {"role": "system", "content": EVAL_SYSTEM_PROMPT},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            timeout=config.GROQ_EVAL_TIMEOUT_SECONDS,
-        )
-        raw_text = completion.choices[0].message.content.strip()
-        # Strip accidental markdown fences if the model adds them anyway.
-        if raw_text.startswith("```"):
-            raw_text = raw_text.strip("`")
-            if raw_text.lower().startswith("json"):
-                raw_text = raw_text[4:].strip()
-        evaluation = json.loads(raw_text)
-        eval_time = time.perf_counter() - started
-        return evaluation, round(eval_time, 3), None
-    except Exception as exc:  # noqa: BLE001 - evaluation failure shouldn't kill the run
-        eval_time = time.perf_counter() - started
-        return None, round(eval_time, 3), f"Evaluation failed: {exc}"
+    last_error = None
+    for client in groq_clients:
+        try:
+            completion = client.chat.completions.create(
+                model=config.GROQ_MODEL,
+                messages=[
+                    {"role": "system", "content": EVAL_SYSTEM_PROMPT},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0,
+                timeout=config.GROQ_EVAL_TIMEOUT_SECONDS,
+            )
+            raw_text = completion.choices[0].message.content.strip()
+            # Strip accidental markdown fences if the model adds them anyway.
+            if raw_text.startswith("```"):
+                raw_text = raw_text.strip("`")
+                if raw_text.lower().startswith("json"):
+                    raw_text = raw_text[4:].strip()
+            evaluation = json.loads(raw_text)
+            eval_time = time.perf_counter() - started
+            return evaluation, round(eval_time, 3), None
+        except Exception as exc:  # noqa: BLE001 - evaluation failure shouldn't kill the run
+            last_error = exc
+            if "rate_limit" in str(exc) or "429" in str(exc):
+                continue  # try the next key
+            break  # non-rate-limit error — no point retrying with another key
+    eval_time = time.perf_counter() - started
+    return None, round(eval_time, 3), f"Evaluation failed: {last_error}"
 
 
 def build_summary(results):
@@ -367,6 +409,33 @@ def build_summary(results):
             risk = r["llm_evaluation"].get("hallucination_risk", "unknown")
             risk_counts[risk] = risk_counts.get(risk, 0) + 1
         summary["hallucination_risk_breakdown"] = risk_counts
+
+        # Scores broken down by expected_type (covered/uncovered/off_topic).
+        # A single blended average is misleading: a "covered" question that
+        # gets a real grounded answer and an "off_topic" question that
+        # CORRECTLY refuses are both good outcomes, but the judge scores a
+        # correct refusal low ("fails to answer the question") since it has
+        # no way to know refusing was the right call. Judge answer quality
+        # only within "covered" questions, where a real answer is expected.
+        by_type_scores = {}
+        for r in scored:
+            expected = (r.get("robustness_check") or {}).get("expected_type")
+            if not expected:
+                continue
+            by_type_scores.setdefault(expected, []).append(r["llm_evaluation"].get("overall_score"))
+        if by_type_scores:
+            summary["avg_overall_score_by_expected_type"] = {
+                t: round(statistics.mean(v for v in vals if isinstance(v, (int, float))), 2)
+                for t, vals in by_type_scores.items()
+                if any(isinstance(v, (int, float)) for v in vals)
+            }
+            summary["avg_overall_score_note"] = (
+                "The blended avg_overall_score above mixes 'covered' questions (where a real "
+                "grounded answer is expected) with 'off_topic'/'uncovered' ones (where refusing "
+                "or disclosing is the CORRECT behavior, but the judge doesn't know that and scores "
+                "it low). avg_overall_score_by_expected_type separates these — judge 'covered' "
+                "answer quality using its own number, not the blended one."
+            )
     else:
         summary["note"] = "No questions were successfully evaluated by the LLM judge."
 
@@ -396,6 +465,9 @@ def build_summary(results):
             t = rc["expected_type"]
             bucket = by_type.setdefault(t, {"passed": 0, "failed": 0})
             bucket["passed" if rc["passed"] else "failed"] += 1
+        for bucket in by_type.values():
+            bucket["total"] = bucket["passed"] + bucket["failed"]
+            bucket["rate"] = round(bucket["passed"] / bucket["total"], 3) if bucket["total"] else None
         summary["robustness_summary"] = {
             "total_checked": len(checked),
             "total_passed": sum(1 for rc in checked if rc["passed"]),
@@ -451,7 +523,7 @@ def build_summary(results):
 
 def main():
     questions = load_questions()
-    groq_client = Groq(api_key=config.GROQ_API_KEY)
+    groq_clients = [Groq(api_key=key) for key in config.GROQ_JUDGE_API_KEYS]
     config.OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
     print(f"Loaded {len(questions)} question(s) from {config.INPUT_FILE}")
@@ -506,11 +578,13 @@ def main():
                 record["citations"] = body.get("citations", [])
                 record["citation_count"] = len(record["citations"])
                 record["returned_conversation_id"] = body.get("conversation_id")
+                record["answer_source"] = body.get("answer_source")
+                record["retrieved_chunk_count"] = body.get("retrieved_chunk_count")
                 last_conversation_id = record["returned_conversation_id"] or last_conversation_id
 
                 print("    -> asking Groq judge model to evaluate this answer...")
                 evaluation, eval_time, eval_error = evaluate_with_llm(
-                    groq_client, q_text, record["answer"], record["citations"], api_result["response_time_seconds"]
+                    groq_clients, q_text, record["answer"], record["citations"], api_result["response_time_seconds"]
                 )
                 record["llm_evaluation"] = evaluation
                 record["llm_evaluation_time_seconds"] = eval_time
@@ -528,7 +602,9 @@ def main():
                     print(f"    -> precision@10={pr['precision_at_10']} recall@10={pr['recall_at_10']} "
                           f"(matched by {pr['match_field']})")
 
-                record["robustness_check"] = check_robustness(q, record["answer"], record["citations"])
+                record["robustness_check"] = check_robustness(
+                    q, record["answer"], record["citations"], body.get("answer_source")
+                )
                 if record["robustness_check"]["checked"]:
                     rc = record["robustness_check"]
                     verdict = "PASS" if rc["passed"] else "FAIL"
@@ -578,7 +654,7 @@ def main():
                         variant_record["was_answerable"] = vbody.get("was_answerable")
 
                         v_eval, v_eval_time, v_eval_error = evaluate_with_llm(
-                            groq_client,
+                            groq_clients,
                             q_text,
                             variant_record["answer"],
                             variant_record["citations"],

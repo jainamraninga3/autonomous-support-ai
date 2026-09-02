@@ -1,0 +1,28 @@
+# Build context is ./backend (see docker-compose.yml), so these paths are
+# relative to backend/.
+#
+# .env is EXCLUDED on purpose: secrets must not be baked into an image
+# that could be pushed to a registry. Compose injects it at run time via
+# `env_file` instead, read from the host.
+.env
+.env.*
+!.env.example
+
+# The host virtualenv is not just unnecessary in the image, it's actively
+# harmful: it's Windows-built and gigabytes in size.
+.venv/
+
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+
+# Test/eval CODE is kept in the image on purpose, so `docker compose exec
+# backend pytest` works without a local virtualenv. Only their generated
+# output is excluded.
+rag_chat_test/output/
+
+logs/
+*.log
+
+.git/
+.gitignore

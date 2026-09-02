@@ -41,9 +41,9 @@ def write_chunks_to_weaviate(
 ) -> int:
     """Embed and upsert a document version's chunks into Weaviate.
 
-    `chunks` are plain dicts with the same shape the ingestion pipeline
-    writes to `data/processed/.../v<version>.json`
-    (`index`, `text`, `token_count`, `start_page`, `end_page`).
+    `chunks` are plain dicts as returned by `embedder.read_chunks()`
+    (`index`, `text`, `token_count`, `start_page`, `end_page`) — the
+    `document_chunks` rows the ingestion pipeline wrote to PostgreSQL.
 
     Returns the number of chunks written.
     """

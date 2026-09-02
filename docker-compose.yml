@@ -1,12 +1,42 @@
+# Whole stack in one command:
+#
+#   docker compose up --build
+#
+# Brings up PostgreSQL, Weaviate, and the backend. The backend applies
+# database migrations itself on startup (see backend/entrypoint.sh), so
+# there is no separate schema step and no local virtualenv needed.
+#
+# First run is slow: the image builds torch (CPU-only, ~1GB) and the first
+# question or ingest downloads BAAI/bge-m3 (~2.3GB) into the `model_cache`
+# volume. Both are cached afterwards.
+#
+# Swagger: http://localhost:8000/docs
+#
+# NOTE: `docker compose down -v` deletes the named volumes — that means
+# your uploaded PDFs, their chunks, and every embedding. Plain
+# `docker compose down` keeps them.
+
 services:
   postgres:
     image: postgres:16-alpine
     env_file:
       - ./backend/.env
     ports:
+      # Host 5433 to avoid colliding with a locally-installed PostgreSQL.
+      # Inside the compose network the port is always 5432.
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      # The backend runs migrations the moment it starts, so it must not
+      # start before Postgres is actually accepting connections — not
+      # merely "container running".
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER:-postgres} -d $${POSTGRES_DB:-rag_chatbot}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
 
   weaviate:
     image: semitechnologies/weaviate:1.27.0
@@ -22,7 +52,48 @@ services:
       - "50051:50051"
     volumes:
       - weaviate_data:/var/lib/weaviate
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./backend
+    env_file:
+      # Groq keys, model choice, chunk settings, log level — everything
+      # that isn't host-specific.
+      - ./backend/.env
+    environment:
+      # These OVERRIDE .env (compose gives `environment` precedence), and
+      # they have to: .env points at localhost:5433 for running the app
+      # outside Docker, which inside the network resolves to the backend
+      # container itself, not Postgres.
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: "5432"
+      WEAVIATE_HOST: weaviate
+      WEAVIATE_PORT: "8080"
+      WEAVIATE_GRPC_PORT: "50051"
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      weaviate:
+        # No healthcheck on the Weaviate image (no curl/wget in it), so
+        # this only waits for the container to start. Harmless: the app
+        # already degrades gracefully when Weaviate isn't reachable yet
+        # and reports it on GET /health.
+        condition: service_started
+    volumes:
+      - model_cache:/models
+      # --- Live-reload development (optional) ---
+      # Uncomment the bind mount below AND the `command` line to edit code
+      # on the host and have the container reload, instead of rebuilding
+      # the image for every change. Leave both commented for a
+      # self-contained image that runs exactly what was built.
+      # - ./backend:/app
+    # command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    restart: unless-stopped
 
 volumes:
-  postgres_data:
-  weaviate_data:
+  postgres_data: # documents, PDF bytes, chunk text, chat history
+  weaviate_data: # embeddings
+  model_cache: # BAAI/bge-m3 + BGE-Reranker-v2-M3 weights (~2.3GB each)

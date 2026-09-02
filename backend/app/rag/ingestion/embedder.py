@@ -6,8 +6,6 @@ needs PostgreSQL) since embedding needs BGE-M3 and a reachable Weaviate
 endpoint and by `scripts.embed_document`.
 """
 
-import json
-from pathlib import Path
 from uuid import UUID
 
 from weaviate.classes.query import Filter
@@ -22,13 +20,24 @@ logger = get_logger(__name__)
 
 
 async def read_chunks(session_factory, document_id: UUID, version: int) -> list[dict]:
+    """Return a document version's chunks from PostgreSQL, in order."""
     async with session_factory() as session:
         repository = DocumentRepository(session=session)
         doc_version = await repository.get_version(document_id, version)
-    if doc_version is None:
-        raise FileNotFoundError(f"No version {version} found for document_id={document_id}")
-    payload = json.loads(Path(doc_version.storage_path).read_text(encoding="utf-8"))
-    return payload["chunks"]
+        if doc_version is None:
+            raise FileNotFoundError(f"No version {version} found for document_id={document_id}")
+        chunk_rows = await repository.get_chunks(doc_version.id)
+
+    return [
+        {
+            "index": row.chunk_index,
+            "text": row.text,
+            "token_count": row.token_count,
+            "start_page": row.start_page,
+            "end_page": row.end_page,
+        }
+        for row in chunk_rows
+    ]
 
 
 def is_already_embedded(weaviate_client, document_id: UUID, version: int) -> bool:

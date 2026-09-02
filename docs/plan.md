@@ -1,5 +1,27 @@
 # Production-Grade RAG Chatbot — Technical Specification
 
+> **This is the destination spec, not the current state.** It is the
+> long-term R&D target and is deliberately NOT implemented all at once.
+> For what actually exists right now — and what has been verified live
+> versus merely written — read [PROJECT_LOG.md](PROJECT_LOG.md) first.
+>
+> As of 2026-09-01, broadly implemented: sections 4-8 (databases,
+> ingestion, PDF processing, chunking), 11-12 (BGE-M3 embeddings, hybrid
+> retrieval), 14-20 (classification, rewriting, candidate strategy,
+> reranking, context construction), 23-27 (LLM, grounded-answer policy,
+> citations, verification, deduplication), 28 (versioning), 33 (logging),
+> 35-38 (evaluation, via `backend/rag_chat_test/`), and 42 (the Final V1
+> Pipeline) — extended beyond the spec with a small-talk branch, a
+> disclosed general-knowledge fallback, and multilingual Q&A with
+> dual-language retrieval.
+>
+> Not implemented: 9 (contextual chunking), 10 (parent-child retrieval),
+> 13 (metadata filtering), 21 (context compression), 22 (multi-query
+> retrieval), 29-32 (auth, tenant isolation, rate limiting, background
+> ingestion), 34 (observability/tracing), and OCR. Section 19's reranker
+> IS built but is disabled by default — the evaluation set showed it cost
+> ~3x the latency for no score gain on this corpus.
+
 ## 1. Project Overview
 
 Build a production-oriented Retrieval-Augmented Generation (RAG) chatbot.
@@ -121,8 +143,8 @@ No frontend is required for V1.
 | Reranker             | BGE-Reranker-v2-M3                           |
 | Document Format      | PDF                                          |
 | Chunking             | Fixed-size + overlap                         |
-| Initial Chunk Size   | ~600 tokens                                  |
-| Initial Overlap      | ~100 tokens                                  |
+| Initial Chunk Size   |                                   |
+| Initial Overlap      |                                   |
 | Evaluation           | Custom evaluation pipeline                   |
 | Logging              | Application logging                          |
 | Tracing              | RAG pipeline tracing                         |

@@ -39,21 +39,72 @@ RERANK_VARIANTS = [
 # the runner moves on to the next question.
 REQUEST_TIMEOUT_SECONDS = None
 
-# --- Evaluator LLM (Groq) — used to judge each answer's quality ---
-# Prefer an environment variable if set, otherwise fall back to the key
-# given directly for this test harness. Override by setting GROQ_API_KEY
-# in your shell before running the script.
-GROQ_API_KEY = os.environ.get(
-    "GROQ_API_KEY",
-    "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",
-)
-GROQ_MODEL = "openai/gpt-oss-120b"
-GROQ_EVAL_TIMEOUT_SECONDS = 30
-
 # --- Files ---
 BASE_DIR = Path(__file__).resolve().parent.parent
 INPUT_FILE = BASE_DIR / "input" / "questions.json"
 OUTPUT_DIR = BASE_DIR / "output"
+
+# The main backend's own .env file (backend/.env) — this harness never
+# imports backend code, but reading its .env as plain text is just
+# reading a config file, not touching app/. Used so this test harness's
+# judge LLM shares the same Groq key(s) as the real app instead of
+# needing its own separate key hardcoded here.
+BACKEND_ENV_FILE = BASE_DIR.parent / ".env"
+
+
+def _read_env_file(path):
+    """Minimal KEY=VALUE .env parser — no python-dotenv dependency needed
+    for this one read. Ignores blank lines, comments, and malformed lines."""
+    values = {}
+    if not path.exists():
+        return values
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        values[key.strip()] = value.strip().strip('"').strip("'")
+    return values
+
+
+_backend_env = _read_env_file(BACKEND_ENV_FILE)
+
+# --- Evaluator LLM (Groq) — used to judge each answer's quality ---
+# Resolution order: shell environment variable first (highest priority,
+# for a quick one-off override), then the real backend's own .env file
+# (backend/.env) — so this harness always uses the SAME Groq key(s) as
+# the actual chatbot, with nothing hardcoded or duplicated here.
+#
+# The backend itself tries GROQ_API_KEY first and only falls through to
+# _1/_2/_3 when rate-limited — so GROQ_API_KEY is the one most likely to
+# already be near its daily token quota from the test run's own chat/rag
+# traffic. The judge tries the SAME 4 keys in the OPPOSITE order (_3
+# first) so judging doesn't compete with the test traffic for the same
+# key's quota, and still falls back across all 4 if one is exhausted.
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY") or _backend_env.get("GROQ_API_KEY")
+GROQ_MODEL = os.environ.get("GROQ_MODEL") or _backend_env.get("GROQ_MODEL") or "openai/gpt-oss-120b"
+GROQ_EVAL_TIMEOUT_SECONDS = 30
+
+_env_override = os.environ.get("GROQ_API_KEY")
+if _env_override:
+    GROQ_JUDGE_API_KEYS = [_env_override]
+else:
+    GROQ_JUDGE_API_KEYS = [
+        key
+        for key in (
+            _backend_env.get("GROQ_API_3"),
+            _backend_env.get("GROQ_API_2"),
+            _backend_env.get("GROQ_API_1"),
+            _backend_env.get("GROQ_API_KEY"),
+        )
+        if key
+    ]
+
+if not GROQ_API_KEY:
+    raise RuntimeError(
+        f"No Groq API key found. Set GROQ_API_KEY in your shell, or make sure "
+        f"{BACKEND_ENV_FILE} has a GROQ_API_KEY= line."
+    )
 
 # If True, every question reuses the conversation_id returned by the
 # previous question (one continuous conversation). If False (default),
@@ -78,6 +129,13 @@ CHAIN_CONVERSATIONS = False
 # ambiguous or edge-case questions).
 OUT_OF_SCOPE_MARKER = "I'm a support assistant for our company's policies and documents"
 GENERAL_FALLBACK_MARKER = "This question isn't covered by our available documents"
+
+# --- Quick retest filter ---
+# Set to a list of question `id`s from questions.json to run ONLY those
+# questions (e.g. after a backend fix, to quickly re-check just the
+# ones that failed last time, instead of waiting for the full run).
+# Set to None (default) to run every question in the file, as normal.
+RETEST_ONLY_IDS = None
 
 # --- Precision@10 / Recall@10 ---
 # Computed only for questions that provide ground truth in

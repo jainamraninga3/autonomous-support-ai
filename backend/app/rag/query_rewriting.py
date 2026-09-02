@@ -21,6 +21,9 @@ Rules:
 - Expand abbreviations only when their meaning is certain.
 - Never invent facts or add assumptions.
 - Never answer the question.
+- Keep the rewrite in the EXACT SAME language as the original query — never translate it, \
+even if you think another language would retrieve better (e.g. a Hindi/Gujarati/Marathi query \
+must be rewritten in that same language, not English).
 - Return ONLY the rewritten query, nothing else — no explanation, no quotes.
 
 Original query: {query}

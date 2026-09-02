@@ -40,4 +40,7 @@ async def rag_ask(
         answer=result.answer,
         citations=[_to_citation_response(c) for c in result.citations],
         was_answerable=result.was_answerable,
+        rewritten_query=result.rewritten_query,
+        english_query=result.english_query,
+        classification=result.classification,
     )

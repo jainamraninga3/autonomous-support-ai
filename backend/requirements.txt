@@ -1,0 +1,54 @@
+# Every runtime, migration, ML, and test dependency in one file.
+#
+# Replaces the previous requirements/base.txt + dev.txt + embeddings.txt
+# split. `sentence-transformers` (and therefore torch) is now included
+# rather than opt-in: the app cannot embed or rerank without it, so a
+# "docker compose up and it works" setup has to have it. Consequences to
+# know about:
+#   - the image is large (torch is ~2.5GB of it)
+#   - BAAI/bge-m3 (~2.3GB) downloads on FIRST USE, not at build time, and
+#     is cached in a Docker volume (see docker-compose.yml) so it isn't
+#     re-downloaded every time the container is recreated
+#
+# Pinned exactly, deliberately: an unpinned rebuild months later is a
+# different application.
+
+# --- Web framework ---
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+
+# --- Config / validation ---
+pydantic==2.10.4
+pydantic-settings==2.7.1
+
+# --- Database ---
+sqlalchemy==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+
+# --- Vector store ---
+weaviate-client==4.9.6
+
+# --- LLM + orchestration ---
+langgraph==0.2.60
+groq==0.11.0
+
+# --- Document ingestion ---
+pypdf==5.1.0
+tiktoken==0.8.0
+
+# --- Embeddings + reranking (BGE-M3, BGE-Reranker-v2-M3) ---
+# Pulls in torch. On Windows, a local `pip install` of torch can fail with
+# "OSError: [WinError 206] The filename or extension is too long" —
+# torch's wheel has deeply nested license paths that overflow the default
+# MAX_PATH. One-time fix, admin PowerShell:
+#   New-ItemProperty -Path "HKLM:\SYSTEM\CurrentControlSet\Control\FileSystem" -Name "LongPathsEnabled" -Value 1 -PropertyType DWORD -Force
+# Not an issue inside the Linux container.
+sentence-transformers==3.3.1
+
+# --- Tests ---
+pytest==8.3.4
+pytest-asyncio==0.25.0
+httpx==0.27.0
+requests==2.32.3

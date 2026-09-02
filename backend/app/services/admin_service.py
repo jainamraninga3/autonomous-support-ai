@@ -22,9 +22,10 @@ class AdminService:
 
     async def reset_postgres(self) -> list[str]:
         """Deletes all `documents` and `chat_sessions` rows.
-        `document_versions` and `messages` cascade via their FKs'
-        `ondelete="CASCADE"`. Does not touch files on disk (the chunk
-        JSON under `PROCESSED_DATA_DIR`, or uploaded PDFs)."""
+        `document_versions`, `document_chunks`, and `messages` cascade via
+        their FKs' `ondelete="CASCADE"` — which now includes the stored
+        PDF bytes and chunk text, since nothing lives on disk. Does not
+        touch Weaviate; use `reset_vector_store` for that."""
         doc_result = await self.session.execute(delete(Document))
         chat_result = await self.session.execute(delete(ChatSession))
         await self.session.commit()

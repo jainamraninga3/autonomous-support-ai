@@ -59,11 +59,20 @@ class Settings(BaseSettings):
         return [key for key in (self.GROQ_API_KEY, self.GROQ_API_1, self.GROQ_API_2, self.GROQ_API_3) if key]
 
     # --- Document ingestion ---
-    # Where extracted/chunked output is written, ahead of Weaviate being
-    # wired in. Relative to the backend/ working directory by default.
-    PROCESSED_DATA_DIR: str = "../data/processed"
+    # Set to 100/10 at the user's explicit direction, overriding the
+    # 600/100 that `chunk_pages` defaults to. Recorded here because it is
+    # a measured trade, not an oversight: at ~100 tokens this corpus's
+    # policy text splits mid-sentence, and a 10-token overlap is too
+    # narrow to guarantee a multi-clause sentence survives whole in
+    # either neighbour. That exact failure produced a wrong answer —
+    # "Accumulated earned leave may be carried forward, each year, EL
+    # beyond 30 days is encashed by the Company in January" was severed,
+    # and a query retrieving only the tail told users carry-forward was
+    # not in the policy at all. If that class of error reappears, this is
+    # the first thing to raise; parent-child chunking (plan.md section
+    # 10) is the way to keep small retrieval units without it.
     CHUNK_SIZE_TOKENS: int = 100
-    CHUNK_OVERLAP_TOKENS: int = 20
+    CHUNK_OVERLAP_TOKENS: int = 10
 
     # --- Embeddings (dense vectors for Weaviate) ---
     # BGE-M3 per plan.md section 11. Loading this model requires `torch`
@@ -82,10 +91,17 @@ class Settings(BaseSettings):
     RERANK_TOP_K: int = 10
     RERANK_SCORE_THRESHOLD: float | None = None
 
-    # --- Document uploads ---
-    # Where PDFs uploaded via `POST /api/v1/documents/upload` are saved
-    # to disk (ahead of ingestion — see `app/services/document_service.py`).
-    DOCUMENTS_DIR: str = "../data/documents"
+    # Defaults to False: the evaluation set (backend/rag_chat_test) now
+    # exists and says reranking does not pay for itself on this corpus.
+    # Across both a 16-question and a 2-question run, hybrid-without-
+    # rerank matched or beat rerank+hybrid on answer quality (8.00 vs
+    # 7.69, then 9.0 vs 9.0) while taking roughly a third of the time
+    # (16.1s vs 48.9s, then 31.9s vs 43.5s), and won more questions
+    # outright. The reranker model and `rerank_chunks` are kept — this
+    # is one env var to flip if a bigger or more heterogeneous corpus
+    # changes that answer, and the harness still A/B tests all four
+    # variants on every run regardless of this setting.
+    RERANK_ENABLED: bool = False
 
     @property
     def database_url(self) -> str:

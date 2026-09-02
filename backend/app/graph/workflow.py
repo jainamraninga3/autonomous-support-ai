@@ -3,6 +3,7 @@ a disclosed general-knowledge fallback, and scoped to refuse anything
 that isn't company-related:
 
 START -> classify -> GENERAL -> refuse (out of scope) -> END
+                   -> SMALL_TALK -> short conversational reply -> END
                    -> RAG_REQUIRED -> rewrite -> retrieve -> generate -> [was_answerable?]
                                                                  -> yes -> verify -> END
                                                                  -> no  -> general_fallback -> END
@@ -34,9 +35,12 @@ via closures built inside `build_graph()` rather than threaded through
 `GraphState` — state should hold data, not live service handles.
 """
 
+import asyncio
+
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
+from app.core.config import get_settings
 from app.core.logging import get_logger
 from app.database.vector_store import CHUNK_COLLECTION_NAME
 from app.graph.state import GraphState
@@ -45,8 +49,11 @@ from app.rag.classification import QueryClassification, classify_query
 from app.rag.embeddings import EmbeddingModelUnavailableError, get_embedder
 from app.rag.generation.answer_generator import generate_answer
 from app.rag.generation.context_builder import build_context
+from app.rag.generation.small_talk import generate_small_talk_reply
 from app.rag.generation.verification import verify_answer
 from app.rag.query_rewriting import rewrite_query
+from app.rag.query_translation import translate_query_to_english
+from app.rag.retrieval.merge import merge_by_rank
 from app.rag.reranking import get_reranker
 from app.rag.retrieval.hybrid_search import hybrid_search
 from app.rag.retrieval.rerank import rerank_chunks
@@ -61,6 +68,19 @@ _UNSUPPORTED_ANSWER = (
 _GENERAL_FALLBACK_PREFIX = (
     "This question isn't covered by our available documents, so here is a "
     "general-knowledge answer instead (not verified against our internal policies):\n\n"
+)
+
+_GENERAL_FALLBACK_INSTRUCTION = (
+    "The user asked the question below. It is NOT covered by our company documents, "
+    "so you are answering from general knowledge instead — the user has already been "
+    "told this answer is not verified against our internal policies, so do not repeat "
+    "that disclaimer yourself. Give your best direct, helpful, general-knowledge answer "
+    "right away. Do not ask clarifying questions and do not refuse — attempt a genuinely "
+    "useful answer even if the question is brief, informal, or has typos; make reasonable "
+    "assumptions about what's being asked rather than asking the user to clarify. Respond in "
+    "the SAME language the question below is written in (Hindi, Gujarati, Marathi, or any "
+    "other language) — do not switch to English or any other language.\n\n"
+    "Question: {query}"
 )
 
 _OUT_OF_SCOPE_ANSWER = (
@@ -93,12 +113,34 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
             "answer": _OUT_OF_SCOPE_ANSWER,
             "citations": [],
             "verified": None,
+            "answer_source": "off_topic_refusal",
+        }
+
+    async def small_talk_node(state: GraphState) -> dict:
+        # A pure greeting is neither a document question nor something to
+        # refuse — see app/rag/generation/small_talk.py for why this one
+        # LLM call is safe where `general_node`'s deliberately isn't.
+        reply = await generate_small_talk_reply(state["original_query"], llm_client)
+        return {
+            "response": reply,
+            "answer": reply,
+            "citations": [],
+            "verified": None,
+            "answer_source": "small_talk",
         }
 
     async def rewrite_node(state: GraphState) -> dict:
-        rewritten = await rewrite_query(state["original_query"], llm_client)
+        # Both calls read only `original_query`, so they run concurrently
+        # — the English translation costs no extra wall-clock, it just
+        # rides along beside the rewrite it would otherwise wait for.
+        rewritten, english = await asyncio.gather(
+            rewrite_query(state["original_query"], llm_client),
+            translate_query_to_english(state["original_query"], llm_client),
+        )
         logger.info("Query rewrite: %r -> %r", state["original_query"], rewritten)
-        return {"rewritten_query": rewritten}
+        if english:
+            logger.info("English retrieval query: %r", english)
+        return {"rewritten_query": rewritten, "english_query": english}
 
     async def retrieve_node(state: GraphState) -> dict:
         if weaviate_client is None or not weaviate_client.collections.exists(CHUNK_COLLECTION_NAME):
@@ -109,8 +151,27 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         try:
             embed_query_fn = get_embedder().embed_query
             candidates = hybrid_search(collection, query, embed_query_fn)
-            reranked = rerank_chunks(query, candidates, get_reranker().score)
-            chunks = [r.chunk for r in reranked]
+
+            # Second pass in English, merged by rank. A non-English query
+            # embeds into the same BGE-M3 space as the English documents,
+            # but does NOT reliably surface the same chunks an English
+            # query would — see app/rag/query_translation.py for the
+            # measurement that motivated this.
+            english_query = state["english_query"]
+            if english_query:
+                english_candidates = hybrid_search(collection, english_query, embed_query_fn)
+                candidates = merge_by_rank(candidates, english_candidates, limit=len(candidates))
+
+            settings = get_settings()
+            if settings.RERANK_ENABLED:
+                reranked = rerank_chunks(query, candidates, get_reranker().score)
+                chunks = [r.chunk for r in reranked]
+            else:
+                # Stage 1 already returns highest-score-first, so taking
+                # the head is the same selection reranking would make,
+                # minus the cross-encoder pass. See RERANK_ENABLED in
+                # app/core/config.py for why this is the default.
+                chunks = candidates[: settings.RERANK_TOP_K]
         except EmbeddingModelUnavailableError:
             logger.exception("Embedding/reranking unavailable during graph retrieval")
             chunks = []
@@ -126,18 +187,35 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         # own general knowledge rather than just refusing, but disclose
         # that plainly so the user knows it isn't grounded in our
         # documents. Citations stay empty: nothing here is sourced.
-        general_answer = await llm_client.generate_reply(state["original_query"])
+        general_answer = await llm_client.generate_reply(
+            _GENERAL_FALLBACK_INSTRUCTION.format(query=state["original_query"])
+        )
         response = _GENERAL_FALLBACK_PREFIX + general_answer
-        return {"response": response, "answer": response, "citations": [], "verified": None}
+        return {
+            "response": response,
+            "answer": response,
+            "citations": [],
+            "verified": None,
+            "answer_source": "general_fallback",
+        }
 
     async def verify_node(state: GraphState) -> dict:
         context = build_context(state["chunks"])
         verification = await verify_answer(state["answer"], context, llm_client)
         response = state["answer"] if verification.supported else _UNSUPPORTED_ANSWER
-        return {"verified": verification.supported, "response": response}
+        return {
+            "verified": verification.supported,
+            "verification_reason": verification.reasoning,
+            "response": response,
+            "answer_source": "rag",
+        }
 
     def _route_after_classify(state: GraphState) -> str:
-        return "general" if state["classification"] == QueryClassification.GENERAL.value else "rewrite"
+        if state["classification"] == QueryClassification.GENERAL.value:
+            return "general"
+        if state["classification"] == QueryClassification.SMALL_TALK.value:
+            return "small_talk"
+        return "rewrite"
 
     def _route_after_generate(state: GraphState) -> str:
         return "verify" if state["was_answerable"] else "general_fallback"
@@ -145,6 +223,7 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
     graph = StateGraph(GraphState)
     graph.add_node("classify", classify_node)
     graph.add_node("general", general_node)
+    graph.add_node("small_talk", small_talk_node)
     graph.add_node("rewrite", rewrite_node)
     graph.add_node("retrieve", retrieve_node)
     graph.add_node("generate", generate_node)
@@ -152,8 +231,13 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
     graph.add_node("verify", verify_node)
 
     graph.add_edge(START, "classify")
-    graph.add_conditional_edges("classify", _route_after_classify, {"general": "general", "rewrite": "rewrite"})
+    graph.add_conditional_edges(
+        "classify",
+        _route_after_classify,
+        {"general": "general", "small_talk": "small_talk", "rewrite": "rewrite"},
+    )
     graph.add_edge("general", END)
+    graph.add_edge("small_talk", END)
     graph.add_edge("rewrite", "retrieve")
     graph.add_edge("retrieve", "generate")
     graph.add_conditional_edges(

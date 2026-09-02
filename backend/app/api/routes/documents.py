@@ -83,7 +83,7 @@ async def list_documents(service: DocumentService = Depends(get_document_service
                 DocumentVersionInfo(
                     version=v.version,
                     is_active=v.is_active,
-                    storage_path=v.storage_path,
+                    page_count=v.page_count,
                     is_embedded=is_already_embedded(service.weaviate_client, document.id, v.version),
                 )
                 for v in document.versions
@@ -107,7 +107,7 @@ async def get_document(
             DocumentVersionInfo(
                 version=v.version,
                 is_active=v.is_active,
-                storage_path=v.storage_path,
+                page_count=v.page_count,
                 is_embedded=is_already_embedded(service.weaviate_client, document.id, v.version),
             )
             for v in document.versions

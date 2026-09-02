@@ -22,9 +22,17 @@ from app.rag.ingestion.pipeline import IngestionError, ingest_pdf
 
 
 async def main(path: Path, force: bool) -> int:
+    if not path.exists():
+        print(f"Ingestion failed: File not found: {path}", file=sys.stderr)
+        return 1
+
+    # The pipeline stores the PDF's bytes in PostgreSQL and never reads
+    # from disk itself, so the CLI is the one that loads the file.
+    file_bytes = path.read_bytes()
+
     async with AsyncSessionLocal() as session:
         try:
-            result = await ingest_pdf(path, session=session, force_reprocess=force)
+            result = await ingest_pdf(file_bytes, path.name, session=session, force_reprocess=force)
         except IngestionError as exc:
             print(f"Ingestion failed: {exc}", file=sys.stderr)
             return 1

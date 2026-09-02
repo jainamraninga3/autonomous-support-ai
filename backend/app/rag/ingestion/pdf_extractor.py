@@ -6,8 +6,8 @@ table extraction as a V1 feature, but not required for this initial
 extraction/cleaning/chunking slice — OCR stays deferred entirely).
 """
 
+import io
 from dataclasses import dataclass
-from pathlib import Path
 
 from pypdf import PdfReader
 from pypdf.errors import PdfReadError
@@ -25,22 +25,27 @@ class PdfExtractionError(Exception):
     """Raised when a PDF cannot be read or parsed."""
 
 
-def extract_pages(path: Path) -> list[ExtractedPage]:
-    """Extract raw text from every page of a PDF, in order."""
+def extract_pages(data: bytes, name: str = "<uploaded pdf>") -> list[ExtractedPage]:
+    """Extract raw text from every page of a PDF, in order.
+
+    Takes the PDF's bytes rather than a path: uploads are never written
+    to disk, and re-chunking reads the bytes back out of Postgres. `name`
+    is only used in error messages.
+    """
     try:
-        reader = PdfReader(str(path))
+        reader = PdfReader(io.BytesIO(data))
     except (PdfReadError, OSError) as exc:
-        raise PdfExtractionError(f"Could not read PDF '{path}': {exc}") from exc
+        raise PdfExtractionError(f"Could not read PDF '{name}': {exc}") from exc
 
     if reader.is_encrypted:
-        raise PdfExtractionError(f"PDF '{path}' is encrypted — encrypted PDFs are not supported yet.")
+        raise PdfExtractionError(f"PDF '{name}' is encrypted — encrypted PDFs are not supported yet.")
 
     pages: list[ExtractedPage] = []
     for index, page in enumerate(reader.pages, start=1):
         try:
             text = page.extract_text() or ""
         except Exception as exc:  # pypdf can raise a variety of parser errors per page
-            raise PdfExtractionError(f"Failed to extract text from page {index} of '{path}': {exc}") from exc
+            raise PdfExtractionError(f"Failed to extract text from page {index} of '{name}': {exc}") from exc
         pages.append(ExtractedPage(page_number=index, text=text))
 
     return pages

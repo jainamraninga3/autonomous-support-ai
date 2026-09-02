@@ -2,30 +2,100 @@
 
 FastAPI + PostgreSQL + Weaviate + Groq, orchestrated by a real LangGraph
 workflow implementing plan.md's full "Final V1 Pipeline": query
-classification (general vs. RAG-required) → query rewriting → hybrid
-search → BGE-Reranker-v2-M3 reranking → grounded answer generation with
-citations → answer verification. `POST /api/v1/chat` runs this whole
-graph; `POST /api/v1/rag/ask` is a lower-level endpoint that always runs
-the RAG half directly (no classification), matching `scripts.ask`.
-Documents are uploaded and ingested via the HTTP API (see "Documents API"
-below) — upload a PDF to get a `document_id`, then use that id to embed
-it into Weaviate whenever you're ready.
+classification (off-topic / small talk / RAG-required) → query rewriting
+→ hybrid search → grounded answer generation with citations → answer
+verification. `POST /api/v1/chat` runs this whole graph;
+`POST /api/v1/rag/ask` shares its front gate and query rewriting but
+skips verification and the general-knowledge fallback, and is the
+endpoint that exposes retrieval knobs (`limit`/`alpha`/`rerank`/`top_k`)
+per request — use it for tuning. Documents are uploaded and ingested via
+the HTTP API (see "Documents API" below) — upload a PDF to get a
+`document_id`, then use that id to embed it into Weaviate whenever you're
+ready.
 
-`requirements/embeddings.txt` (torch + sentence-transformers) is an
-extra, opt-in install — not pulled in by default.
+**Ask in any language.** Questions in Hindi, Gujarati, Marathi, Kannada,
+Hinglish and so on are answered in that same language even though the
+documents are English — BGE-M3 embeds query and document into one shared
+vector space, so there is no translation step in the answer path. A
+non-English question additionally retrieves with an English translation
+of itself and merges the hits, because cross-lingual retrieval otherwise
+surfaces a measurably different chunk set. See "Multilingual" below.
+
+**BGE-Reranker-v2-M3 reranking is present but OFF by default**
+(`RERANK_ENABLED=false`) — the evaluation set showed it cost roughly 3x
+the latency for no score gain on this corpus. See "Reranking" below.
+
+**All state lives in PostgreSQL and Weaviate — nothing on disk.** The
+uploaded PDF's bytes and its chunk text are both stored in Postgres;
+there is no `data/documents/` or `data/processed/` any more. See "Where
+your documents are stored" below.
+
+All dependencies are in a single `requirements.txt`, including
+`sentence-transformers`/torch — the app cannot embed or rerank without
+them, so they are no longer opt-in.
 
 Scanned/image-based PDFs (no real text layer) are not supported —
 extraction will come back with 0 chunks for those. Not part of this
 project's scope; see `docs/PROJECT_LOG.md` if that changes later.
 
-## Setup
+## Quick start (Docker — everything at once)
+
+No virtualenv, no local Python, no separate schema step.
 
 ```powershell
+copy backend\.env.example backend\.env   # then set GROQ_API_KEY + POSTGRES_PASSWORD
+docker compose up --build
+```
+
+Run from the repository root. That starts PostgreSQL, Weaviate, and the
+backend; the backend applies its own database migrations on startup
+(`backend/entrypoint.sh` runs `alembic upgrade head` before uvicorn).
+
+- Swagger: <http://localhost:8000/docs>
+- Health: <http://localhost:8000/health>
+
+**The first run is slow, twice over.** The image build compiles/downloads
+CPU-only torch (~1GB), and then the first question or ingest downloads
+BAAI/bge-m3 (~2.3GB) at runtime. Both are cached afterwards — torch in
+the image layer, the model weights in the `model_cache` volume — so
+subsequent starts are fast. If the first `/api/v1/chat` call seems to
+hang, it is downloading the model; watch `docker compose logs -f backend`.
+
+Useful commands:
+
+```powershell
+docker compose logs -f backend         # follow app logs
+docker compose exec backend pytest     # run the test suite in the container
+docker compose exec backend alembic current   # which migration is applied
+docker compose restart backend         # after changing backend/.env
+docker compose down                    # stop; KEEPS your data
+docker compose down -v                 # stop and DELETE all data (see below)
+```
+
+`docker compose down -v` deletes the named volumes — your uploaded PDFs,
+their chunks, and every embedding, with no copy left on disk. Plain
+`docker compose down` keeps everything.
+
+To edit code without rebuilding, uncomment the bind mount and the
+`--reload` command in the `backend` service in `docker-compose.yml`.
+
+## Setup (running the backend locally instead)
+
+Only needed if you want to run the app outside Docker — for a debugger,
+or to run the CLI scripts. The databases still come from Docker.
+
+```powershell
+docker compose up -d postgres weaviate   # from the repo root
 cd backend
 .venv\Scripts\Activate.ps1
-pip install -r requirements/dev.txt
+pip install -r requirements.txt
 copy .env.example .env   # then edit POSTGRES_PASSWORD, GROQ_API_KEY, etc.
+alembic upgrade head
 ```
+
+`.env` is written for this case: `POSTGRES_HOST=localhost`,
+`POSTGRES_PORT=5433`. Compose overrides both for the containerised
+backend (`postgres:5432`), so one `.env` works for both.
 
 ## Multiple Groq API keys (automatic rate-limit fallback)
 
@@ -41,37 +111,76 @@ rate-limited. A non-rate-limit Groq error (auth failure, 5xx, etc.)
 surfaces immediately as `503 service_unavailable` — a different key
 wouldn't fix those, so it doesn't burn through the rest of the list.
 
-## Start PostgreSQL + Weaviate (Docker)
+## Run the backend locally (outside Docker)
 
-```powershell
-docker compose up -d
-```
-
-Run from the repository root, where `docker-compose.yml` lives.
-
-## Run the backend
+With the databases already up (`docker compose up -d postgres weaviate`)
+and the virtualenv active:
 
 ```powershell
 uvicorn app.main:app --reload
 ```
 
-## Create database tables
-
-No Alembic/migrations yet — tables are created directly from the ORM
-models:
+Stop the containerised `backend` service first if it's running, or port
+8000 will already be taken:
 
 ```powershell
-python -m scripts.init_db
+docker compose stop backend
 ```
 
-Re-run this after adding new models; it only creates missing tables, it
-does not alter existing ones.
+## Database migrations (Alembic)
+
+The containerised backend runs `alembic upgrade head` on every startup,
+so normally there is nothing to do. Running locally, or changing a model:
+
+```powershell
+alembic upgrade head                              # apply pending migrations
+alembic revision --autogenerate -m "what changed" # generate one from model changes
+alembic current                                   # which revision is applied
+alembic check                                      # do models match the database?
+alembic downgrade -1                               # undo the last migration
+```
+
+Config lives in `alembic.ini` + `migrations/env.py`. The database URL is
+NOT in `alembic.ini` — `env.py` takes it from `app.core.config`, so
+migrations can never run against a different database than the app.
+
+**If you have an existing database built by the old `scripts.init_db`**
+(pre-Alembic, so it has no `alembic_version` table) and its schema
+already matches the models:
+
+```powershell
+alembic stamp head
+```
+
+That records it as migrated without running anything. Running
+`alembic upgrade head` instead would try to CREATE tables that already
+exist and fail.
+
+`scripts/init_db.py` is now a deprecation notice that exits non-zero.
+Why it went away: it used `Base.metadata.create_all`, which only creates
+*missing* tables — when a model's columns changed it silently skipped
+that table and still reported success, leaving the schema stale until an
+insert failed with `column ... does not exist`. That happened during the
+2026-09-01 storage change and is the reason Alembic is here.
+
+**`alembic downgrade` on the initial revision drops every table**, which
+now includes your uploaded PDFs — they live in
+`document_versions.pdf_bytes`. See "Where your documents are stored".
 
 ## Test
 
 ```powershell
+docker compose exec backend pytest   # in the container, no venv needed
+```
+
+or locally, with the virtualenv active:
+
+```powershell
 pytest
 ```
+
+97 tests, no database or network required — Weaviate, Postgres, the LLM,
+and the embedding/reranking models are all faked.
 
 ## Ingest a PDF
 
@@ -79,22 +188,49 @@ pytest
 python -m scripts.ingest_document path\to\file.pdf
 ```
 
-Extracts text, cleans it, and chunks it (fixed-size, ~100 tokens with
-~20 token overlap — configurable via `CHUNK_SIZE_TOKENS` /
-`CHUNK_OVERLAP_TOKENS`). Chunks are written as JSON under
-`data/processed/<document_id>/v<version>.json`; the `documents` /
-`document_versions` tables in PostgreSQL track identity and versioning.
-Re-ingesting identical file content is a no-op (deduped by content
-hash); pass `--force` to reprocess and create a new version.
+Extracts text, cleans it, and chunks it (fixed-size, **100 tokens with
+10 token overlap** — configurable via `CHUNK_SIZE_TOKENS` /
+`CHUNK_OVERLAP_TOKENS`). Everything is stored in PostgreSQL: chunk text
+in `document_chunks`, the source PDF's own bytes in
+`document_versions.pdf_bytes`, and identity/versioning in `documents` /
+`document_versions`. **Nothing is written to disk.** Re-ingesting
+identical file content is a no-op (deduped by content hash); pass
+`--force` to reprocess and create a new version.
+
+### Choosing a chunk size
+
+`CHUNK_SIZE_TOKENS` / `CHUNK_OVERLAP_TOKENS` are 100/10. Know the trade
+this makes, because it has already produced one wrong answer: at ~100
+tokens a policy sentence stating two rules can be split across two
+chunks, and a small overlap means neither neighbour holds it whole. Real
+example from the leave policy — "Accumulated earned leave may be carried
+forward, each year, EL beyond 30 days is encashed by the Company in
+January" was severed, so a query retrieving only the tail saw the
+encashment rule and truthfully reported that carry-forward "is not stated
+in the policy." Generation and verification were both behaving correctly;
+the context was broken. Measured on that PDF:
+
+| size / overlap | chunks | chunks holding that sentence whole |
+| --- | --- | --- |
+| 600 / 100 | 4 | 2 |
+| 100 / 20 | 25 | 1 |
+| 100 / 10 (current) | 23 | 1 |
+
+If answers start claiming the documents omit something they actually
+state, raise chunk size (or overlap) first. Parent-child chunking
+(plan.md section 10) is the proper way to keep small retrieval units
+without severing sentences; not built yet.
+
+**Chunking happens at UPLOAD time**, so changing these settings does not
+affect already-uploaded documents — delete and re-upload to re-chunk.
 
 ## Embed a document into Weaviate
 
 ```powershell
-pip install -r requirements/embeddings.txt   # one-time: torch + sentence-transformers
 python -m scripts.embed_document <document_id>
 ```
 
-Reads the JSON chunk output from the ingest step above, embeds each
+Reads the chunk rows from PostgreSQL (`document_chunks`), embeds each
 chunk with BGE-M3 (`EMBEDDING_MODEL_NAME`, default `BAAI/bge-m3`), and
 upserts it into Weaviate's `DocumentChunk` collection (created
 automatically, `vectorizer: none` — vectors are supplied here, not
@@ -102,11 +238,12 @@ computed by Weaviate). Re-running is idempotent (same document/version/
 chunk-index always maps to the same object, so it updates rather than
 duplicates).
 
-**Note:** `requirements/embeddings.txt` is intentionally NOT part of
-`base.txt`/`dev.txt` — installing it pulls in `torch`, and the first
-embed call downloads the ~2.3GB BGE-M3 model weights. Verified end to
-end with a real model run: ingest → embed → 1024-dim vectors confirmed
-in Weaviate.
+**Note:** `sentence-transformers` (and torch) are now part of the single
+`requirements.txt` rather than an opt-in extra, since nothing in the RAG
+path works without them. The first embed call still downloads the ~2.3GB
+BGE-M3 weights at runtime — in Docker these land in the `model_cache`
+volume and survive container recreation. Verified end to end with a real
+model run: ingest → embed → 1024-dim vectors confirmed in Weaviate.
 
 **Windows note:** installing `torch` can fail with
 `OSError: [WinError 206] The filename or extension is too long` —
@@ -134,8 +271,8 @@ against an evaluation set.
 Stage 2, with `--rerank`: reranks those candidates with
 `BAAI/bge-reranker-v2-m3` down to a relevance-based Top-`--top-k`-max
 (not forced to exactly that count). First use downloads the reranker
-weights (~2.3GB, same `requirements/embeddings.txt` install as the
-embedding model) — verified working end to end.
+weights (~2.3GB, cached alongside the embedding model) — verified
+working end to end.
 
 ## Ask a question (full RAG pipeline)
 
@@ -166,13 +303,13 @@ There is no auto-ingest-on-startup — documents are uploaded and
 processed explicitly, via HTTP, in two steps:
 
 1. `POST /api/v1/documents/upload` (multipart) — extracts, cleans, and
-   chunks the PDF, writes it to PostgreSQL, and saves the file under
-   `DOCUMENTS_DIR` (default `data/documents/`). Does **not** embed it.
-   Returns a `document_id` (dedups by content hash — uploading identical
-   bytes again returns the same id with `is_duplicate: true`).
+   chunks the PDF, and writes the chunk text AND the PDF's own bytes to
+   PostgreSQL. Nothing is written to disk. Does **not** embed it. Returns
+   a `document_id` (dedups by content hash — uploading identical bytes
+   again returns the same id with `is_duplicate: true`).
 2. `POST /api/v1/documents/{document_id}/ingest` — embeds that
-   document's chunks into Weaviate (BGE-M3 + `requirements/embeddings.txt`
-   required). Checks Weaviate first and skips re-embedding if this
+   document's chunks into Weaviate (BGE-M3). Checks Weaviate first and
+   skips re-embedding if this
    version is already there; pass `?force=true` to re-embed anyway
    (safe — upserts by a deterministic UUID, never duplicates).
 
@@ -181,14 +318,20 @@ Plus:
 - `GET /api/v1/documents` — list every document, its versions, and
   whether each version is embedded (checked live against Weaviate).
 - `GET /api/v1/documents/{document_id}` — same, for one document.
-- `DELETE /api/v1/documents/{document_id}` — removes its Postgres rows,
-  its stored chunk JSON, and any chunks it has in Weaviate.
+- `DELETE /api/v1/documents/{document_id}` — removes its Postgres rows
+  (versions, chunk text, and the stored PDF bytes all cascade) and any
+  chunks it has in Weaviate. Do this before re-uploading the same PDF
+  with different chunk settings: dedup would otherwise skip the upload,
+  and retrieval does not filter by version, so two versions' chunks would
+  coexist in Weaviate and mix granularities.
 
 ## Admin: resetting data (development only)
 
 - `POST /api/v1/admin/reset/postgres` — deletes all `documents` (and
-  cascaded `document_versions`) and `chat_sessions` (and cascaded
-  `messages`) rows. Does not touch Weaviate or files on disk.
+  cascaded `document_versions`, `document_chunks`, and the stored PDF
+  bytes) and `chat_sessions` (and cascaded `messages`) rows. Does not
+  touch Weaviate. **This now destroys your uploaded source documents**,
+  since they live in Postgres rather than on disk.
 - `POST /api/v1/admin/reset/vector-store` — deletes and recreates the
   Weaviate `DocumentChunk` collection, discarding every embedded chunk.
   Does not touch PostgreSQL.
@@ -204,15 +347,23 @@ this router anywhere with real users.
 pipeline:
 
 ```
-START -> classify -> GENERAL -> refuse (out of scope) -> END
-                   -> RAG_REQUIRED -> rewrite -> retrieve (hybrid + rerank) -> generate -> [was_answerable?]
-                                                                                   -> yes -> verify -> END
-                                                                                   -> no  -> general_fallback -> END
+START -> classify -> GENERAL     -> refuse (out of scope, no LLM call) -> END
+                  -> SMALL_TALK  -> short conversational reply         -> END
+                  -> RAG_REQUIRED -> rewrite (+ English translation, concurrent)
+                                       -> retrieve (hybrid; 2nd English pass merged
+                                          for non-English queries; rerank off by default)
+                                       -> generate -> [was_answerable?]
+                                                       -> yes -> verify -> END
+                                                       -> no  -> general_fallback -> END
 ```
 
 - **Classify** (`app/rag/classification.py`) — an LLM call decides
-  GENERAL vs. RAG_REQUIRED. Defaults to RAG_REQUIRED on any ambiguous
-  reply (an unnecessary retrieval is cheaper than a skipped one). A
+  GENERAL vs. SMALL_TALK vs. RAG_REQUIRED. Defaults to RAG_REQUIRED on
+  any ambiguous reply (an unnecessary retrieval is cheaper than a skipped
+  one). SMALL_TALK is deliberately narrow — a message with NO question in
+  it ("hi", "thanks", "good morning"). A greeting that also asks
+  something ("hi, how many sick leaves do I get?") stays RAG_REQUIRED, so
+  the shortcut can't swallow real questions. A
   GENERAL classification (off-topic — math, coding, general trivia,
   "what is 2+2", "what does Amazon do") is refused outright with a fixed
   message ("I'm a support assistant for our company's policies and
@@ -222,11 +373,24 @@ START -> classify -> GENERAL -> refuse (out of scope) -> END
   closes off the obvious way a user could otherwise turn this into a
   general-purpose assistant or attempt a prompt injection through an
   unconstrained "answer anything" call.
+- **Small talk** (`app/rag/generation/small_talk.py`) — a bare greeting
+  gets a short conversational reply and skips retrieval entirely. This
+  path DOES send your message to the LLM, unlike the GENERAL refusal
+  above, so its prompt is deliberately narrow: 1-2 sentences, greet and
+  invite a policy question, treat the message as data rather than
+  instructions, state no company facts. An empty or implausibly long
+  reply falls back to a fixed greeting. Before this existed, "Hi" was
+  classified GENERAL and refused — and on `/api/v1/rag/ask` it ran a
+  rewrite, a BGE-M3 model load, a 39-second reranker pass and a
+  generation call to find nothing.
 - **Rewrite** (`app/rag/query_rewriting.py`) — improves the query for
   retrieval while preserving its meaning; the *original* question (not
   the rewrite) is what's used to generate the final answer, per plan.md
   section 17. Falls back to the original query if the rewrite looks
-  unreliable (empty, or suspiciously long).
+  unreliable (empty, or suspiciously long). Never translates — a
+  Hindi/Gujarati/Marathi/Kannada query is rewritten in that same script.
+  Runs concurrently (`asyncio.gather`) with the English translation used
+  for the second retrieval pass, so that translation adds no wall-clock.
 - **Retrieve/generate** — the same hybrid search → rerank → grounded
   answer generation already used by `scripts.ask`/`/api/v1/rag/ask`. The
   grounded-answer prompt instructs the LLM to reply with an exact
@@ -251,6 +415,21 @@ START -> classify -> GENERAL -> refuse (out of scope) -> END
   couldn't be verified is a hallucination risk, not a "not in our
   documents" case.
 
+  The prompt is tuned in both directions, each from an observed failure.
+  It must NOT reject an answer merely for assembling facts across several
+  chunks, paraphrasing, being incomplete, or being written in a different
+  language from the context (without that last allowance, every
+  translated answer gets rejected). It MUST reject an answer that claims
+  the context is silent about something the context actually states, or
+  that shifts an inclusive threshold ("3 or more days" becoming "more
+  than 3 days"). It walks an explicit 3-step procedure to do this rather
+  than being asked to "check", because asking wasn't enough.
+
+  Rejections log at WARNING with the reason, and the reason is returned
+  as `verification_reason` — worth knowing about, because a verifier
+  quietly discarding good answers is otherwise invisible, and that field
+  is what identified two real bugs that prompt-guessing had missed.
+
 `POST /api/v1/chat` now runs this graph (see Endpoints below) instead of
 calling the LLM directly.
 
@@ -261,25 +440,46 @@ calling the LLM directly.
   → refusal (off-topic), or rewrite → retrieve → generate →
   verify/general fallback), persisted to `chat_sessions` / `messages`
   in PostgreSQL. Body:
-  `{"message": "...", "conversation_id": null}`. Returns
-  `{"reply": "...", "conversation_id": "...", "citations": [...],
-  "rewritten_query": "..."}` — `citations` is empty for a general
-  (non-RAG) reply; `rewritten_query` is the retrieval-optimized rewrite
-  of `message` (null on the GENERAL/refusal branch, where no rewriting
-  happens — see "Rewrite" above). Uses Groq
+  `{"message": "...", "conversation_id": null}`. Returns `reply`,
+  `conversation_id`, `citations`, plus these diagnostic fields:
+
+  | field | meaning |
+  | --- | --- |
+  | `answer_source` | which branch produced the reply: `off_topic_refusal`, `small_talk`, `rag`, or `general_fallback`. Check this instead of string-matching the reply text. |
+  | `rewritten_query` | the retrieval-optimized rewrite; null on the refusal/small-talk branches |
+  | `english_query` | English translation used for the second retrieval pass; null for an already-English message |
+  | `retrieved_chunk_count` | chunks retrieved before generation. Can be > 0 even for `general_fallback` — retrieval may return chunks that exist but don't answer the question; generation decides that. |
+  | `verified` | whether verification judged the answer supported. Only set on the `rag` path. When false, `reply` is a fixed "could not verify" message and the generated answer was discarded. |
+  | `verification_reason` | the verifier's one-sentence justification — the only place that says why an answer was thrown away |
+
+  `citations` is empty for a refusal, small talk, and the
+  general-knowledge fallback (none of them are sourced from documents).
+  Uses Groq
   (`GROQ_API_KEY` + `GROQ_MODEL`) when a key is set; falls back to an
   echo stub (`StubLLMClient`) otherwise, so the app still runs without
   one (classification/rewriting/verification against the echo stub will
   behave oddly since it doesn't understand the prompts — fine for
   proving the flow wires together, not for real answers). See "Multiple
   Groq API keys" below for automatic rate-limit fallback.
-- `POST /api/v1/rag/ask` — HTTP entry point onto the same pipeline as
-  `scripts.ask`: hybrid search → optional rerank → grounded answer with
-  citations, no classification/rewriting/verification. Body:
-  `{"question": "...", "limit": 30, "alpha": 0.5, "rerank": true,
-  "top_k": 10}` (all fields but `question` optional, defaults shown).
-  Returns `{"answer": "...", "citations": [...], "was_answerable":
-  true}`. Returns `404` if no documents have been ingested yet (the
+- `POST /api/v1/rag/ask` — the tuning endpoint: same front gate
+  (classify → small talk / off-topic refusal / RAG) and same query
+  rewriting as the graph, then hybrid search → optional rerank →
+  grounded answer with citations. No verification and no
+  general-knowledge fallback. Body: `{"question": "...", "limit": 30,
+  "alpha": 0.5, "rerank": true, "top_k": 10}` (all fields but `question`
+  optional). `rerank` is tri-state: omit it or send `null` to follow the
+  app-wide `RERANK_ENABLED` (default false), or send `true`/`false` to
+  override for one request — which is the point of this endpoint.
+  **Swagger prefills `"rerank": true`**, so delete that line unless you
+  want reranking; otherwise the first such call downloads the ~2.3GB
+  reranker model and looks like a hang.
+  Returns `answer`, `citations`, `was_answerable`, `rewritten_query`,
+  `english_query`, and `classification`. Classification runs BEFORE the
+  Weaviate checks, so a greeting is answered even with nothing ingested;
+  for small talk and off-topic refusals `citations` is empty and
+  `was_answerable` is false — that is not a failure to find an answer,
+  it means retrieval never ran. Returns `404` if no documents have been
+  ingested yet (the
   `DocumentChunk` collection doesn't exist), `503` if Weaviate isn't
   reachable or the embedding/reranking dependencies aren't installed.
   The Weaviate client is opened once at app startup (not reconnected per
@@ -289,6 +489,104 @@ calling the LLM directly.
   `DELETE /api/v1/documents/{id}` — see "Documents API" above.
 - `POST /api/v1/admin/reset/postgres`, `/vector-store`, `/all` — see
   "Admin: resetting data" above.
+
+## Multilingual
+
+Ask in Hindi, Gujarati, Marathi, Kannada, Hinglish, or anything else, and
+the answer comes back in that language — from English-only documents.
+There is no language-detection step and no answer-translation step:
+
+```
+question (Hindi)
+  -> classify           (topic-based, language-blind)
+  -> rewrite            STAYS IN HINDI (translation explicitly forbidden)
+     + translate        English copy, for retrieval only  [concurrent]
+  -> BGE-M3 embed       one shared multilingual vector space
+  -> Weaviate hybrid    x2 (Hindi query + English query), merged by rank
+  -> generate           English context + Hindi question -> Hindi answer, ONE call
+  -> verify             judges support ACROSS languages
+```
+
+Why no translation of the answer: a translation pass over a finished
+answer is where numbers, dates, and inclusive/exclusive thresholds get
+corrupted, and it happens after verification could catch it. Translating
+only for retrieval keeps that risk out of the answer path.
+
+Why the second retrieval pass: a non-English query does retrieve from
+English documents via BGE-M3, but not reliably the SAME chunks an English
+query would. Measured on one compound question — the Hindi query shared
+only 6/10 retrieved chunks with the English query and missed the one
+stating the earned-leave carry-forward rule, so the answer (correctly,
+given its context) reported that rule as absent. With the English pass
+merged in: 8/10 for Hindi, 9/10 for Kannada, and the missing fact
+recovered. `app/rag/query_translation.py` builds the English query
+(returning `None` for an already-English question, which skips the second
+pass); `app/rag/retrieval/merge.py` merges the two ranked lists **by
+rank, not by score** — each Weaviate hybrid query normalizes scores
+within its own result set, so a 0.9 from one says nothing about a 0.9
+from the other.
+
+Verified live: the same question in English, Hindi, Gujarati, Marathi,
+Kannada and Hinglish all returned the correct cited fact with
+`verified: true`.
+
+**Caveat:** extraction is text-layer only, so a scanned PDF in any
+language yields zero chunks. No OCR.
+
+## Reranking
+
+`RERANK_ENABLED` defaults to **false**. The `backend/rag_chat_test`
+evaluation set showed BGE-Reranker-v2-M3 wasn't paying for itself on this
+corpus:
+
+| variant | avg score | avg time | questions won |
+| --- | --- | --- | --- |
+| hybrid, no rerank | 8.00 | 16.1s | 5 |
+| hybrid + rerank | 7.69 | 48.9s | 0 |
+| vector-only + rerank | 8.38 | 58.8s | 4 |
+| BM25-only + rerank | 7.75 | 57.6s | 0 |
+
+With it off, `retrieve_node` takes the head of Stage-1's already-ranked
+results up to `RERANK_TOP_K` — the same selection, minus the
+cross-encoder pass. The model and `rerank_chunks` are untouched: set
+`RERANK_ENABLED=true` in `.env` to restore it, and the harness A/B tests
+all four variants on every run regardless of this setting. A larger or
+more heterogeneous corpus could easily flip this conclusion; re-measure
+before trusting it there.
+
+## Where your documents are stored
+
+Nothing is on disk. An uploaded PDF ends up here:
+
+```
+your PDF's bytes
+  -> document_versions.pdf_bytes   (BYTEA)
+  -> Postgres database "rag_chatbot"
+  -> /var/lib/postgresql/data      inside the postgres:16-alpine container
+  -> Docker named volume "postgres_data"
+```
+
+Chunk text lives alongside it in `document_chunks`; the embeddings live
+in Weaviate's `DocumentChunk` collection (named volume `weaviate_data`).
+On Windows both volumes are inside Docker Desktop's WSL2 VM, not in the
+project tree.
+
+| action | your PDFs and chunks |
+| --- | --- |
+| `docker compose restart` / `stop` / `start` | survive |
+| `docker compose down` | survive (named volumes aren't removed) |
+| `docker compose down -v` | **destroyed** — `-v` deletes named volumes |
+| `alembic downgrade base` | **destroyed** (drops the tables) |
+| `POST /api/v1/admin/reset/postgres` (or `/all`) | **destroyed** |
+
+None of those warn you that source documents are going with them, and
+there is no longer a copy of the PDF in the repo to fall back on. **Keep
+your source files somewhere outside this project.**
+
+The PDF bytes are stored specifically so a document can be re-chunked
+after a `CHUNK_SIZE_TOKENS` change without needing the original file
+again. There is no `/rechunk` endpoint yet, so today that still means
+delete + re-upload.
 
 ## Architecture
 

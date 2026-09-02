@@ -17,7 +17,7 @@ DOCUMENT_ID = uuid.uuid4()
 
 def _fake_result(**overrides) -> IngestionResult:
     defaults = dict(
-        document_id=DOCUMENT_ID, version=1, is_duplicate=False, page_count=1, chunk_count=3, output_path="x.json"
+        document_id=DOCUMENT_ID, version=1, is_duplicate=False, page_count=1, chunk_count=3
     )
     defaults.update(overrides)
     return IngestionResult(**defaults)
@@ -92,38 +92,37 @@ async def test_upload_rejects_empty_file(tmp_path, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_upload_writes_file_and_ingests(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "app.services.document_service.get_settings", lambda: SimpleNamespace(DOCUMENTS_DIR=str(tmp_path))
-    )
+async def test_upload_passes_the_bytes_through_and_writes_nothing_to_disk(tmp_path, monkeypatch) -> None:
+    """Uploads go to PostgreSQL only — the service must hand the raw bytes
+    to the pipeline rather than saving a file first. A stray file on disk
+    is exactly the state this design removed."""
+    seen = {}
 
-    async def fake_ingest_pdf(path, session):
-        assert path.exists()
+    async def fake_ingest_pdf(file_bytes, filename, session):
+        seen["bytes"] = file_bytes
+        seen["filename"] = filename
         return _fake_result()
 
     monkeypatch.setattr("app.services.document_service.ingest_pdf", fake_ingest_pdf)
     service = _make_service(tmp_path)
 
-    result = await service.upload(b"%PDF-1.4\n", "policy.pdf")
+    result = await service.upload(b"%PDF-1.4 header", "policy.pdf")
 
     assert result.document_id == DOCUMENT_ID
-    assert (tmp_path / "policy.pdf").exists()
+    assert seen == {"bytes": b"%PDF-1.4 header", "filename": "policy.pdf"}
+    assert list(tmp_path.iterdir()) == []
 
 
 @pytest.mark.asyncio
 async def test_upload_wraps_ingestion_error(tmp_path, monkeypatch) -> None:
-    monkeypatch.setattr(
-        "app.services.document_service.get_settings", lambda: SimpleNamespace(DOCUMENTS_DIR=str(tmp_path))
-    )
-
-    async def raising_ingest_pdf(path, session):
+    async def raising_ingest_pdf(file_bytes, filename, session):
         raise IngestionError("bad pdf")
 
     monkeypatch.setattr("app.services.document_service.ingest_pdf", raising_ingest_pdf)
     service = _make_service(tmp_path)
 
     with pytest.raises(BadRequestError):
-        await service.upload(b"%PDF-1.4\n", "policy.pdf")
+        await service.upload(b"%PDF-1.4 header", "policy.pdf")
 
 
 @pytest.mark.asyncio
@@ -194,17 +193,18 @@ async def test_ingest_embeds_when_not_yet_embedded(tmp_path, monkeypatch) -> Non
 
 
 @pytest.mark.asyncio
-async def test_delete_document_removes_weaviate_chunks_files_and_row(tmp_path) -> None:
-    storage_file = tmp_path / "v1.json"
-    storage_file.write_text("{}")
-    document = SimpleNamespace(id=DOCUMENT_ID, versions=[SimpleNamespace(storage_path=str(storage_file))])
+async def test_delete_document_removes_weaviate_chunks_and_the_row(tmp_path) -> None:
+    """Deleting a document has to clear BOTH stores: the Postgres row (its
+    versions, chunk text, and stored PDF bytes cascade) and the embedded
+    chunks in Weaviate. Leaving the Weaviate side behind would keep the
+    deleted document answering questions."""
+    document = SimpleNamespace(id=DOCUMENT_ID, versions=[SimpleNamespace(version=1)])
     repository = _FakeRepository(document=document)
     weaviate_client = _FakeWeaviateClient(exists=True)
     service = _make_service(tmp_path, repository=repository, weaviate_client=weaviate_client)
 
     await service.delete_document(DOCUMENT_ID)
 
-    assert not storage_file.exists()
     assert repository.deleted == [document]
     assert len(weaviate_client.collections.deleted_filters) == 1
 

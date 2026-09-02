@@ -15,12 +15,15 @@ class GraphState(TypedDict):
     original_query: str
     classification: str | None
     rewritten_query: str | None
+    english_query: str | None
     chunks: list[Any]
     citations: list[Any]
     answer: str | None
     was_answerable: bool | None
     verified: bool | None
+    verification_reason: str | None
     response: str | None
+    answer_source: str | None
 
 
 def initial_state(query: str) -> GraphState:
@@ -35,10 +38,13 @@ def initial_state(query: str) -> GraphState:
         original_query=query,
         classification=None,
         rewritten_query=None,
+        english_query=None,
         chunks=[],
         citations=[],
         answer=None,
         was_answerable=None,
         verified=None,
+        verification_reason=None,
         response=None,
+        answer_source=None,
     )

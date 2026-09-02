@@ -5,7 +5,8 @@ and accounts. Anyone (any Claude session, any account) picking up this
 project should read this file FIRST, before reading code, to understand
 what exists, what doesn't, and why things are the way they are.
 
-The full long-term spec lives at `../../plan.md` (RAG chatbot R&D spec —
+The full long-term spec lives at `plan.md`, alongside this file in
+`docs/` (RAG chatbot R&D spec —
 do not implement it all at once; it's the destination, not the current
 task). Path corrected 2026-08-25: this file itself was moved from the
 repo root to `docs/PROJECT_LOG.md` at some point outside any logged
@@ -47,8 +48,28 @@ verification, a scoped general-knowledge fallback, and an off-topic
 refusal boundary) — see "Explicitly NOT implemented yet" below for
 what's deliberately still missing.
 
+**Also live-verified as of 2026-09-01:** multilingual Q&A (ask in Hindi,
+Gujarati, Marathi, Kannada, or Hinglish against English-only documents
+and get a correct, cited answer in the language you asked — no
+translation step in the answer path, BGE-M3's shared vector space does
+the work); a SMALL_TALK branch so greetings get a normal reply instead of
+an off-topic refusal; and **all persistence now in PostgreSQL with zero
+filesystem state** (chunk text and the source PDF bytes both live in the
+database; `data/` is dead and safe to delete).
+
+**Running it:** `docker compose up --build` from the repo root starts
+PostgreSQL, Weaviate, AND the backend, with migrations applied
+automatically on startup — no virtualenv needed. **Verified live
+2026-09-01**: image builds, migrations run from `entrypoint.sh`, the
+backend reaches Postgres/Weaviate by service name, upload+ingest work
+end to end, and the `model_cache` volume persists BGE-M3 across restarts.
+Running the backend locally from `backend/.venv` against the Docker
+databases also still works, and is how most live verification in this log
+was done.
+
 **Stack in use right now:**
 - Python 3.11, FastAPI, SQLAlchemy 2.x (async) + asyncpg
+- Alembic for migrations (`backend/migrations/`)
 - PostgreSQL — runs via Docker (`docker-compose.yml`, service `postgres`,
   host port 5433)
 - Weaviate — runs via Docker (`docker-compose.yml`, service `weaviate`,
@@ -73,10 +94,18 @@ what's deliberately still missing.
 **Working endpoints:**
 - `GET /health` — reports app status + PostgreSQL + Weaviate connectivity
 - `POST /api/v1/chat` — runs the full LangGraph workflow: `classify` ->
-  GENERAL is now a fixed OUT-OF-SCOPE REFUSAL (no LLM call at all for
-  that branch — a deliberate security boundary, changed 2026-08-27, see
-  Change Log) -> or RAG_REQUIRED -> rewrite -> retrieve -> generate ->
-  (answerable? verify : disclosed general-knowledge fallback). Persists
+  GENERAL is a fixed OUT-OF-SCOPE REFUSAL (no LLM call at all for that
+  branch — a deliberate security boundary, changed 2026-08-27, see Change
+  Log) -> or SMALL_TALK (added 2026-09-01: a bare greeting gets a short
+  conversational reply, no retrieval) -> or RAG_REQUIRED -> rewrite (+ an
+  English translation for a second retrieval pass, added 2026-09-01) ->
+  retrieve -> generate -> (answerable? verify : disclosed
+  general-knowledge fallback). The response now also carries
+  `rewritten_query`, `english_query`, `retrieved_chunk_count`,
+  `verified`, `verification_reason`, and `answer_source`
+  (`off_topic_refusal`/`small_talk`/`rag`/`general_fallback`) — added
+  2026-09-01 for diagnosability, and directly responsible for correctly
+  diagnosing two failures that prompt-only guessing had missed. Persists
   both the user message and the final reply to PostgreSQL
   (`chat_sessions` / `messages`); `conversation_id` semantics unchanged
   (session UUID, reuse to continue a session; omit or send `null` for a
@@ -91,9 +120,13 @@ what's deliberately still missing.
   refusal. See Change Log for the full history (classify/rewrite/
   retrieve/generate/verify was independently verified live 2026-08-26
   via console-log call-sequence tracing).
-- `POST /api/v1/rag/ask` — unchanged by the graph work above; still
-  always-RAG, no classification/rewriting/verification/fallback,
-  matching `scripts.ask`. **Verified live repeatedly** across this
+- `POST /api/v1/rag/ask` — as of 2026-09-01 this shares the graph's
+  FRONT GATE (classify -> small talk / off-topic refusal / RAG) and does
+  query rewriting; it still has no verification and no general-knowledge
+  fallback, so it remains the lower-level tuning endpoint (it alone
+  exposes `limit`/`alpha`/`rerank`/`top_k` per request). Response carries
+  `rewritten_query`, `english_query`, and `classification`.
+  **Verified live repeatedly** across this
   project (e.g. as part of the Documents API upload/ingest verification
   2026-08-26, and directly during the "collection doesn't exist" auto-
   ingest bug investigation the same day) — real hybrid search + rerank +
@@ -113,12 +146,41 @@ what's deliberately still missing.
   reset-between-tests step.
 
 **Database schema:** SQLAlchemy 2.x models exist for `chat_sessions`,
-`messages` (used by the chat endpoint), and `documents`,
-`document_versions` (now actively used by the ingestion pipeline — see
-below), and `upload_jobs` (still schema only, for the background/async
-ingestion phase, not yet built). No Alembic yet — tables are created
-directly via `python -m scripts.init_db` (`backend/scripts/init_db.py`),
-which must be re-run after adding new models.
+`messages` (used by the chat endpoint), `documents`, `document_versions`,
+`document_chunks` (all three actively used by the ingestion pipeline —
+see below), and `upload_jobs` (still schema only, for the background/
+async ingestion phase, not yet built). `document_versions` holds
+`pdf_bytes` (BYTEA — the source PDF) and `page_count`; it no longer has
+`storage_path`. `document_chunks` holds the chunk text, UNIQUE on
+`(document_version_id, chunk_index)`, CASCADE on its FK.
+
+**Alembic is now the single source of schema truth** (added 2026-09-01,
+`backend/alembic.ini` + `backend/migrations/`). `migrations/env.py` is
+async and takes the DB URL from `app.core.config`, not `alembic.ini`, so
+migrations cannot target a different database than the app. One revision
+exists: `0001_initial`, the baseline with all six tables. The
+containerised backend runs `alembic upgrade head` on every startup
+(`backend/entrypoint.sh`). `scripts/init_db.py` is now a deprecation
+notice that exits 1 — it used `create_all`, which only creates MISSING
+tables and silently skipped a table whose model had changed, reporting
+success while leaving the schema stale until an insert failed with
+"column does not exist". An existing pre-Alembic database that already
+matches the models is adopted with `alembic stamp head` (NOT
+`upgrade head`, which would try to create existing tables).
+**Verified 2026-09-01:** `alembic stamp head` adopted the existing
+database and `alembic check` returned "No new upgrade operations
+detected", proving `0001_initial` matches the models exactly.
+`alembic current` -> `0001_initial (head)`. The containerised backend was
+also observed applying it on startup.
+
+**Where the uploaded PDFs physically live:**
+`document_versions.pdf_bytes` → Postgres DB `rag_chatbot` →
+`/var/lib/postgresql/data` inside the `postgres:16-alpine` container →
+Docker **named volume `postgres_data`** (on Windows, inside Docker
+Desktop's WSL2 VM — not anywhere in the project tree). Survives
+`docker compose restart/stop/start` and `docker compose down`.
+**Destroyed by `docker compose down -v` and by `init_db --recreate`** —
+neither warns that source documents are going with it.
 
 **Document ingestion pipeline (`backend/app/rag/ingestion/`):** the
 extract/chunk/Postgres-write half (`pipeline.py`) is intentionally
@@ -129,12 +191,17 @@ file (must be `.pdf`, non-empty) → hash (sha256) → dedup check against
 `documents.content_hash` → `pypdf` text extraction per page →
 whitespace-only cleaning → fixed-size token chunking via `tiktoken`
 (`cl100k_base` encoding as a model-agnostic stand-in for BGE-M3's own
-tokenizer) at `CHUNK_SIZE_TOKENS`/`CHUNK_OVERLAP_TOKENS` (default
-100/20 as of 2026-08-26 — was 600/100 originally, changed at user
-request, `app/core/config.py`) → chunks written as JSON to
-`PROCESSED_DATA_DIR/<document_id>/v<version>.json` (default
-`data/processed/`) → `documents`/`document_versions` rows created/
-updated via `DocumentRepository`. Run via CLI:
+tokenizer) at `CHUNK_SIZE_TOKENS`/`CHUNK_OVERLAP_TOKENS` (**100/10 as of
+2026-09-01, set at explicit user direction** — was 600/100, then 100/20,
+then 600/100 again after 100-token chunks were traced to a wrong answer;
+see the 2026-09-01 Change Log entry for the measurement and the failure
+signature to watch for) → **chunk text, and the source PDF's own bytes,
+written to PostgreSQL** (`document_chunks` rows + `document_versions.
+pdf_bytes`) → `documents`/`document_versions` rows created/updated via
+`DocumentRepository`. **Nothing is written to disk** as of 2026-09-01:
+chunk text previously lived only in `data/processed/<id>/v<n>.json` with
+Postgres holding just the path, so deleting that directory silently
+destroyed the text. `data/` is now dead and safe to delete. Run via CLI:
 `python -m scripts.ingest_document path/to/file.pdf` (`--force` to
 reprocess and bump the version). **Schema interpretation** (not a schema
 change): `Document.content_hash` is unique, so a `Document` row = one
@@ -153,32 +220,58 @@ contextual chunking, or parent-child structure yet (plan.md sections 6,
 vector_store.py`):** wired and **verified live end to end, including a
 real BGE-M3 model run** (2026-08-25 — see Change Log). CLI:
 `python -m scripts.embed_document <document_id> [--version N]`, reads
-the JSON chunks written by `scripts.ingest_document`, embeds them with
+the chunk rows from PostgreSQL (`document_chunks` — was a JSON file
+before 2026-09-01), embeds them with
 BGE-M3, and upserts them (with 1024-dim vectors, confirmed via a live
 query) into the `DocumentChunk` Weaviate collection (`vectorizer: none`,
 properties per plan.md section 4.1; `section`/`parent_id`/`tenant_id`/
 `document_type`/`access_level` exist in the schema for forward
 compatibility but aren't populated by anything yet). `sentence-
-transformers`/`torch` (`backend/requirements/embeddings.txt`) are now
-installed in this environment — install required enabling Windows
+transformers`/`torch` (now part of the single `backend/requirements.txt`)
+are installed in this environment — install required enabling Windows
 `LongPathsEnabled` first (torch's wheel has deeply nested license
 paths that overflow Windows' default `MAX_PATH` on a long project
 path); see Change Log for the exact fix if this bites another machine.
-Still deliberately NOT in `base.txt`/`dev.txt` (torch is large enough
-that a routine `pip install -r requirements/dev.txt` shouldn't pull it
-in unasked).
+As of 2026-09-01 these are NO LONGER optional: the three
+`requirements/*.txt` files were merged into one `requirements.txt` so a
+`docker compose up` works with no extra install step. The Dockerfile
+installs CPU-only torch (`--extra-index-url .../whl/cpu`) to avoid
+shipping CUDA for hardware this project never uses.
 
 **Hybrid search + reranking (`backend/app/rag/retrieval/
 hybrid_search.py`, `backend/app/rag/retrieval/rerank.py`,
 `backend/app/rag/reranking.py`):** both stages wired and **verified
 live with real models** (2026-08-25 — see Change Log, two entries).
+**Stage 2 is now OFF by default in the graph** (`RERANK_ENABLED: bool =
+False`, added 2026-09-01) — the `rag_chat_test` evaluation set showed it
+did not pay for itself on this corpus: no-rerank hybrid scored 8.00 avg
+at 16.1s and won 5 questions, rerank+hybrid scored 7.69 at 48.9s and won
+0. When off, `retrieve_node` takes the head of Stage-1's already-ranked
+results up to `RERANK_TOP_K`. The model and `rerank_chunks` are kept; one
+env var flips it back, and the harness still A/B tests all four variants
+every run. `/api/v1/rag/ask` keeps its explicit per-request `rerank`
+param.
+
+**Dual-language retrieval** (added 2026-09-01, `app/rag/
+query_translation.py` + `app/rag/retrieval/merge.py`): a non-English
+question retrieves TWICE — once in its own language, once with an English
+translation of itself — and the two ranked lists are merged by rank
+(`merge_by_rank`), not by score (each Weaviate hybrid query normalizes
+scores within its own result set, so they aren't comparable across
+queries). Motivated by a measurement, not a guess: the same question in
+Hindi shared only 6/10 retrieved chunks with English and missed a chunk
+English found. After the change: 8/10 (Hindi), 9/10 (Kannada). The
+translation runs concurrently with the rewrite (`asyncio.gather`), so it
+adds no wall-clock; English questions skip the second pass entirely via
+an `ALREADY_ENGLISH` sentinel. The ANSWER is never translated — it is
+generated once, directly in the question's language.
+
 Stage 1: dense vector search (BGE-M3 query embedding) + Weaviate's BM25
 via its native `hybrid()` query (plan.md section 12); `alpha` (default
-0.5) balances the two, not yet tuned against an evaluation set (none
-exists yet). Returns the raw ranked Top-`limit` (default 30) candidates
-with citation metadata (document name, page span). Stage 2 (`--rerank`
-flag): `BAAI/bge-reranker-v2-m3` (CrossEncoder via sentence-transformers,
-same `requirements/embeddings.txt` install as BGE-M3) rescores and
+0.5) balances the two, not yet tuned against an evaluation set. Returns
+the raw ranked Top-`limit` (default 30) candidates with citation metadata
+(document name, page span). Stage 2 (`--rerank` flag): `BAAI/bge-reranker-v2-m3` (CrossEncoder via sentence-transformers,
+same install as BGE-M3) rescores and
 narrows to a relevance-based Top-`top_k`-max (default 10, NOT forced to
 exactly that count — `score_threshold` param exists but has no default
 yet, no evaluation set to derive one from). CLI: `python -m
@@ -339,7 +432,7 @@ classification) — both are legitimate, intentionally different entry
 points, not a case of one being stale.
 
 **Explicitly NOT implemented yet** (do not build until asked — see
-`../../plan.md` section "Deferred"/"V1 Features" for the full order):
+`plan.md` section "Deferred"/"V1 Features" for the full order):
 table extraction, header/footer detection, contextual chunking,
 parent-child retrieval, metadata filtering (ACL/tenant — the `filters`
 param exists on `hybrid_search()` but nothing populates tenant/ACL
@@ -405,6 +498,399 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 ---
 
 ## Change Log (newest first)
+
+### 2026-09-01 (latest) — `/api/v1/rag/ask` ignored RERANK_ENABLED; Alembic and full-stack Docker now both verified live
+**By:** Claude (Opus 5), same session.
+
+**Bug fixed (mine, from the entry below).** `RagAskRequest.rerank`
+defaulted to `True`, so `/api/v1/rag/ask` ignored `RERANK_ENABLED=false`
+and loaded the reranker anyway — two contradictory defaults for one
+feature. Symptom, hit by the user in Docker: a single Swagger call with
+the prefilled body silently started a ~2.3GB BGE-Reranker-v2-M3 download
+and looked like a hang for 5+ minutes.
+- `app/schemas/rag.py` — `rerank` is now `bool | None = None`.
+- `app/services/rag_service.py` — `do_rerank=None` resolves to
+  `get_settings().RERANK_ENABLED`, so one switch governs both endpoints;
+  passing `true`/`false` still overrides per request, which is the point
+  of that endpoint.
+- `tests/unit/test_rag_service.py` — regression test asserting the
+  reranker model is never LOADED when the setting is off (loading is the
+  expensive part; discarding its output would save nothing). **97 tests
+  passing.**
+- Note for anyone testing via Swagger: it PREFILLS `"rerank": true` from
+  the schema example. Delete that line to get the configured default.
+
+**Alembic is verified.** Previously logged as "NOT yet executed". Now:
+`alembic stamp head` adopted the existing database, and **`alembic check`
+returned "No new upgrade operations detected"** — proving the
+hand-written `0001_initial` matches the models exactly (no missing
+columns, no type mismatches, no missed constraints or indexes).
+`alembic current` reports `0001_initial (head)`.
+
+**Full-stack Docker is verified.** Previously logged as "NOT yet built or
+run". A real `docker compose up --build` run confirmed, from the user's
+own logs: the image builds; `entrypoint.sh` runs `alembic upgrade head`
+before uvicorn ("Migrations up to date"); the backend reaches Postgres
+and Weaviate BY SERVICE NAME (`http://weaviate:8080/...`), so the compose
+env overrides work; upload wrote `pages=5 chunks=23` (confirming the
+100/10 chunking live); `document_versions.pdf_bytes`/`page_count` and
+`document_chunks` are read back correctly; and the `model_cache` volume
+persisted BGE-M3 across container restarts (it loaded in seconds on the
+second run instead of re-downloading).
+
+**Bengali also works** — a language never in the test set. Classification
+→ RAG_REQUIRED, rewrite stayed in Bengali while tightening spelling
+('আমি কত দিনের ছুটি পেতে পারি?' → 'আমি কতদিনের ছুটি পেতে পারি?'), and the
+English retrieval pass produced 'How many days of leave am I entitled
+to?'. The multilingual path generalises past the five languages tested.
+
+**Docs:** `docs/plan.md` gained an implementation-status banner at the
+top (it is the destination spec, and was being read as current state).
+Fixed broken `../../plan.md` paths in this file — plan.md lives in
+`docs/` alongside it, so the correct path is `plan.md`; the old one
+resolved outside the repo. Historical Change Log entries keep their
+original text. Root `README.md` and `backend/README.md` updated for the
+rerank tri-state and the 97-test count.
+
+**Practical note surfaced from the user's logs:** with `DEBUG=true` every
+SQL statement is logged TWICE — once by SQLAlchemy's `echo=True` and once
+through the app's structured logging handler. `DEBUG=false` makes
+container logs readable while keeping the app's own INFO lines.
+
+
+### 2026-09-01 (later) — Alembic migrations, one requirements.txt, and the whole stack in `docker compose up`
+**By:** Claude (Opus 5), same session as the entry below.
+**Why:** User asked for three things: implement Alembic, collapse the
+requirements files into one, and be able to start the entire project with
+Docker alone — "no need of this venv and all".
+
+**Alembic (`backend/alembic.ini`, `backend/migrations/`)** — replaces
+`scripts/init_db.py` as the single source of schema truth.
+- `migrations/env.py` — async (`asyncpg`), and takes the database URL from
+  `app.core.config.get_settings()` rather than from `alembic.ini`, so
+  migrations can never run against a different database than the app.
+  `compare_type` and `compare_server_default` are both on, so
+  autogenerate notices a CHANGED column, not just added/dropped ones —
+  that being the exact blind spot that made the old approach wrong.
+- `migrations/versions/20260901_0001_initial_schema.py` — baseline with
+  all six tables, reflecting the post-storage-change schema
+  (`document_versions.pdf_bytes`/`page_count`, `document_chunks`, no
+  `storage_path`). There is deliberately no migration FROM the
+  pre-Alembic schema: those tables were created by `create_all` with no
+  version tracking, so there is no "before" revision to migrate from.
+  An existing matching database is adopted with `alembic stamp head`.
+- `scripts/init_db.py` — now a deprecation notice that prints the Alembic
+  equivalents and exits 1. Kept rather than deleted so anyone following
+  an older README gets pointed somewhere useful instead of a traceback.
+  Two competing schema mechanisms is how a database ends up in a state
+  neither expects.
+- **NOT yet executed.** Alembic wasn't installed in the venv when this
+  was written, so `alembic upgrade head` has never run and the initial
+  revision is unverified against a real database. Verify with
+  `alembic check` (reports drift between models and database) after
+  installing — that is the one command that would catch a hand-written
+  migration diverging from the models.
+
+**Single `backend/requirements.txt`** — `requirements/base.txt`,
+`dev.txt`, and `embeddings.txt` deleted, contents merged. The notable
+change is that `sentence-transformers` (and therefore torch) is no longer
+opt-in: nothing in the RAG path works without it, so a
+"docker compose up and it works" setup has to include it. Cost: a large
+image. Mitigated by installing CPU-only torch via
+`--extra-index-url https://download.pytorch.org/whl/cpu` in the
+Dockerfile, since the default wheel bundles CUDA for hardware this
+project never uses. `requests` was added (the `rag_chat_test` harness
+needs it and was relying on it being present incidentally).
+
+**Full-stack Docker** — `docker compose up --build` now starts everything.
+- `backend/Dockerfile` — **new** (the one the earliest log entry mentions
+  no longer existed). `python:3.11-slim`; requirements copied and
+  installed before application code so editing a source file doesn't
+  invalidate the slow dependency layer; `HF_HOME=/models` so the model
+  weights land somewhere that can be volume-mounted.
+- `backend/entrypoint.sh` — **new.** `alembic upgrade head`, then `exec`
+  the app. `set -e` so a failed migration stops the container rather than
+  letting the app start against a stale schema — the failure mode Alembic
+  was introduced to prevent. `exec` so uvicorn becomes PID 1 and receives
+  SIGTERM directly; without it the shell swallows the signal and shutdown
+  waits out the 10s kill timeout.
+- `docker-compose.yml` — added the `backend` service and a `model_cache`
+  volume for the ~2.3GB BGE-M3/reranker weights (without it, every
+  container recreation re-downloads them). Postgres gained a `pg_isready`
+  healthcheck and the backend `depends_on: condition: service_healthy`,
+  because the backend runs migrations the instant it starts and
+  "container running" is not the same as "accepting connections".
+  Weaviate has no healthcheck (no curl/wget in that image) so it uses
+  `service_started`; harmless, since the app already degrades gracefully
+  when Weaviate isn't reachable. The backend service OVERRIDES
+  `POSTGRES_HOST`/`POSTGRES_PORT`/`WEAVIATE_HOST` from `.env` — `.env`
+  points at `localhost:5433` for running the app outside Docker, which
+  inside the network would resolve to the backend container itself. A
+  commented bind-mount + `--reload` block is included for live-reload
+  development.
+- `backend/.dockerignore` — **new** (the root one doesn't apply; the build
+  context is `./backend`). Excludes `.env` so secrets are never baked into
+  a pushable image — compose injects it at run time via `env_file`
+  instead. Also excludes the Windows-built `.venv`. Test CODE is
+  deliberately KEPT in the image so `docker compose exec backend pytest`
+  works without a local virtualenv.
+- `backend/.env.example` — documented that the Postgres/Weaviate host
+  values are for local (non-Docker) runs and are overridden by compose,
+  so nobody "fixes" them and breaks the local path; added the
+  `CHUNK_SIZE_TOKENS`/`CHUNK_OVERLAP_TOKENS`/`RERANK_ENABLED` knobs with
+  the chunk-size warning.
+- **NOT yet built or run.** `docker compose up --build` has not been
+  executed, so the image build, the entrypoint, the healthcheck gating,
+  and the migration-on-startup are all unverified. First run is slow
+  twice over: torch in the build, then the model download at first use.
+
+**Docs:** `backend/README.md` restructured to be Docker-first (quick
+start at the top, local venv setup demoted to "running the backend
+locally instead"), with new "Database migrations (Alembic)" content
+replacing the `scripts.init_db` section. Root `README.md` updated: the
+stack is one Docker command, and Alembic moved out of the
+"not implemented" list.
+
+
+### 2026-09-01 — Storage moved fully into PostgreSQL (no filesystem state); chunk size 100/10; SMALL_TALK branch; dual-language retrieval; reranking off by default
+**By:** Claude (Opus 5), this session (covers 2026-08-31 and 2026-09-01,
+which ran together as one continuous session).
+**Why:** A wrong answer traced to chunking, then a series of user
+requests: reply in the user's language, answer greetings normally instead
+of refusing them, stop writing files into the repo, and set chunking to
+100/10.
+
+**The root-cause finding worth reading first.** Three consecutive
+`rag_chat_test` runs showed the Hindi answer stating the leave policy is
+silent on earned-leave carry-forward, which is false. Two rounds of
+prompt fixes (generation, then verification) did not fix it, because it
+was not a prompt bug. `CHUNK_SIZE_TOKENS` was 100, which split this
+sentence across two chunks:
+
+> "Accumulated earned leave may be carried forward, each year, EL beyond
+> 30 days is encashed by the Company in January, based on the EL balance
+> as at 31st December"
+
+Chunk 6 held the head, truncated at "based"; chunk 7 began mid-sentence
+at ", each year, EL beyond 30 days is encashed..." — the carry-forward
+clause severed from the encashment clause. A query retrieving only
+chunk 7 saw the encashment rule and correctly reported carry-forward as
+absent. **Generation and verification were both behaving correctly over a
+broken context.** Measured on the real PDF: 600/100 -> 4 chunks, 2 of
+which hold that sentence whole; 100/20 -> 25 chunks, 1 holds it;
+100/10 -> 23 chunks, 1 holds it. Set to 600/100, then to **100/10 at
+explicit user direction** — the trade and the failure signature are
+recorded in a comment on the setting in `app/core/config.py`. If answers
+start claiming the documents omit something they state, raise this
+first; parent-child chunking (plan.md section 10) is the way to keep
+small retrieval units without the severing.
+
+**Storage: nothing on disk any more.** Chunk text previously lived only
+in `data/processed/<document_id>/v<version>.json` with Postgres holding
+just the path, so deleting a directory silently destroyed the text and
+left the row pointing at nothing — which actually happened this session
+(the source PDFs disappeared from `data/documents/` mid-session, and the
+processed JSON became the only copy of the correct chunking).
+
+- `app/models/document.py` — **new `DocumentChunk` model** (table
+  `document_chunks`: `document_version_id` FK CASCADE + indexed,
+  `chunk_index`, `text`, `token_count`, `start_page`, `end_page`, UNIQUE
+  `(document_version_id, chunk_index)`). `DocumentVersion.storage_path`
+  **removed**, replaced by `pdf_bytes` (BYTEA — the source PDF itself)
+  and `page_count`. Storing the PDF is slightly beyond what was asked;
+  kept deliberately so re-chunking after a `CHUNK_SIZE_TOKENS` change
+  never needs the original file, which this session proved is a real
+  failure mode.
+- `app/repositories/document_repository.py` — `create_chunks()`,
+  `get_chunks()`; `create_version()` now takes `pdf_bytes`/`page_count`.
+- `app/rag/ingestion/pipeline.py` — `ingest_pdf(file_bytes, filename,
+  session, force_reprocess)` (was `(path, ...)`). No JSON write, no disk
+  access at all.
+- `app/rag/ingestion/pdf_extractor.py` — `extract_pages(data: bytes,
+  name=...)` via `io.BytesIO` (was a path).
+- `app/rag/ingestion/hashing.py` — `hash_bytes()` replaces `hash_file()`.
+- `app/rag/ingestion/embedder.py` — `read_chunks()` reads
+  `document_chunks` rows; the JSON-file read is gone.
+- `app/services/document_service.py` — `upload()` no longer writes the
+  PDF to disk; `_unique_destination()` deleted; `delete_document()` no
+  longer unlinks files.
+- `app/core/config.py` — `DOCUMENTS_DIR` and `PROCESSED_DATA_DIR`
+  **removed**.
+- `app/schemas/document.py`, `app/api/routes/documents.py` —
+  `storage_path` -> `page_count` in the API response.
+- `scripts/ingest_document.py` — reads the file itself and passes bytes.
+- `scripts/init_db.py` — **added `--recreate` (+ `--force`)**. Reason:
+  `create_all` only creates MISSING tables and silently skips a table
+  whose model changed, so it reported success while leaving
+  `document_versions` on the old schema — the failure would have
+  surfaced much later as "column does not exist" on the first upload.
+  `--recreate` drops and rebuilds; it refuses to run if any table holds
+  rows unless `--force` is also passed.
+- **Where the PDFs now live:** `document_versions.pdf_bytes` -> Postgres
+  DB `rag_chatbot` -> `/var/lib/postgresql/data` inside the
+  `postgres:16-alpine` container -> Docker **named volume
+  `postgres_data`**. Survives `docker compose restart/stop/start` and
+  `docker compose down`. **Destroyed by `docker compose down -v` and by
+  `python -m scripts.init_db --recreate`** — neither warns about PDFs.
+  Keep source files outside the project.
+- `autonomous-support-ai/data/` is now dead (only empty `__init__.py`
+  stubs remained); user was told it is safe to delete. Nothing recreates
+  it.
+- **Live-verified:** upload -> `chunk_count: 4` at 600/100, ingest ->
+  `embedded_chunk_count: 4`, Weaviate aggregate showed
+  `Leave_Policy.pdf -> 4`, and `data/documents/` + `data/processed/`
+  stayed empty. `DELETE /api/v1/documents/{id}` is still NOT
+  live-verified.
+
+**SMALL_TALK: greetings no longer refused or retrieved on.** "Hi" was
+classified GENERAL on `/api/v1/chat` (fixed out-of-scope refusal) and, on
+`/api/v1/rag/ask`, ran the whole pipeline — a rewrite, a BGE-M3 load, a
+39-second reranker pass, and a generation call — to find nothing.
+
+- `app/rag/classification.py` — third class `SMALL_TALK`, defined
+  narrowly as a message with NO question in it. "hi, how many sick leaves
+  do I get?" stays RAG_REQUIRED (few-shot example + a test), since a
+  loose greeting rule would start swallowing real questions.
+- `app/rag/generation/small_talk.py` — **new.** This path DOES send the
+  user's message to the LLM (unlike `general_node`, which deliberately
+  never does), so the prompt is narrow: 1-2 sentence greeting, message
+  treated as data not instructions, no company facts. Falls back to a
+  fixed greeting on an empty or >500-char reply.
+- `app/graph/workflow.py` — `small_talk` node + route;
+  `answer_source: "small_talk"`.
+- `app/services/rag_service.py` — `/api/v1/rag/ask` now runs the SAME
+  front gate (classify -> small talk / off-topic refusal / RAG) BEFORE
+  the Weaviate availability check, so greetings work even with nothing
+  ingested. This endpoint previously had no classification at all.
+
+**Multilingual: verified working, with no translation step in the answer
+path.** Reply in the language asked, from English-only documents, via
+BGE-M3's shared multilingual vector space — there is no
+language-detection node and no answer-translation pass (an
+answer-translation pass is where numbers and inclusive/exclusive
+thresholds get corrupted, and it would happen after verification could
+catch it). Language rules were added to six prompts: classification,
+`query_rewriting.py` (explicitly must NOT translate),
+`answer_generator.py` (the actual translation, at generation time),
+`verification.py` (judge support across languages, or every translated
+answer is rejected), `general_fallback`, `small_talk`.
+
+- **Live-verified 2026-09-01**, same question in six languages: English,
+  Hindi, Gujarati, Marathi, Kannada, Hinglish — all six returned the
+  correct fact (7 days), 10 citations, `verified: True`, robustness 6/6,
+  avg score 8.67. Rewrites stayed in the original script and even fixed
+  in-script spelling.
+- The predicted "BM25 is dead for cross-lingual queries so tune `alpha`"
+  problem was **not supported by the data** — no retrieval degradation
+  appeared on those six, and the alpha sweep was dropped as unjustified.
+- `app/rag/query_translation.py` + `app/rag/retrieval/merge.py` — **new.
+  Dual-language retrieval.** A harder compound question exposed the real
+  cross-lingual weakness: retrieval returns a materially DIFFERENT chunk
+  set per language (Hindi shared 6/10 with English, Kannada 8/10) and
+  Hindi missed a chunk English found. So a non-English query now also
+  retrieves with an English translation of itself, and the two ranked
+  lists are merged by `merge_by_rank`. Merging is by RANK, not score —
+  each Weaviate hybrid query normalizes within its own result set, so
+  scores are not comparable across the two; primary goes first at each
+  rank so the original-language query keeps the majority of slots.
+  Translation and rewrite run concurrently (`asyncio.gather`), so the
+  extra LLM call costs no wall-clock. An `ALREADY_ENGLISH` sentinel skips
+  the second pass for English questions. **Result: overlap rose to 8/10
+  (Hindi) and 9/10 (Kannada), and the missing encashment fact was
+  recovered.**
+
+**Reranking disabled by default.** `RERANK_ENABLED: bool = False` in
+`app/core/config.py`; `retrieve_node` takes the head of Stage-1's
+already-ranked results up to `RERANK_TOP_K` when off. Evidence from the
+harness across two runs: no-rerank hybrid scored 8.00 avg at 16.1s and
+won 5 questions; rerank+hybrid scored 7.69 at 48.9s and won 0; a later
+2-question run showed 9.0/31.9s vs 9.0/43.5s. The model and
+`rerank_chunks` are kept — one env var flips it back, and the harness
+still A/B tests all four variants regardless. `/api/v1/rag/ask` keeps its
+explicit per-request `rerank` param.
+
+**Prompt fixes (2026-08-31, each driven by an observed failure):**
+
+- `classification.py` — the prompt asked "could you answer this directly
+  without a lookup?", which wrongly refused 5 legitimate leave questions.
+  Rewritten to judge by TOPIC, with few-shot examples. Verified 5/5.
+- `answer_generator.py` — (a) answer partially rather than emitting
+  `NOT_FOUND_IN_CONTEXT` when the context covers part of a compound
+  question; (b) never generalize a per-case rule into a universal one
+  (the policy's post-dating rules DIFFER per leave type, and flattening
+  them produced a contradiction the verifier correctly caught); (c) when
+  the context is silent, say only that the document does not cover it —
+  never also assert what the rule is ("no certificate is required" is an
+  invented entitlement, and adding a hedge alongside it does not license
+  it); (d) preserve inclusive/exclusive thresholds exactly ("3 or more
+  days" is not "more than 3 days"), which drifted specifically in
+  translated summary sections; (e) a summary must repeat the body's
+  numbers exactly.
+- `verification.py` — was rejecting valid compound answers for combining
+  facts across chunks. Loosened to reject only contradictions and facts
+  absent from the context, with explicit allowances for cross-chunk
+  assembly, paraphrase, cross-language support, and incompleteness. Then
+  tightened again: an absence claim passes ONLY if the context genuinely
+  lacks the fact, and the prompt now walks an explicit 3-step procedure
+  (enumerate absence claims and look each one up; check thresholds; check
+  any summary against the body). Rejections now log at WARNING with the
+  reason.
+- `query_rewriting.py` — must not translate the rewrite.
+
+**Observability added to the chat API** — this is what turned two blind
+guesses into two precise diagnoses, and is worth keeping. `ChatResponse`
+now returns `rewritten_query`, `english_query`, `retrieved_chunk_count`,
+`verified`, `verification_reason`, and `answer_source`
+(`off_topic_refusal` / `small_talk` / `rag` / `general_fallback`).
+`RagAskResponse` returns `rewritten_query`, `english_query`, and
+`classification`. `GraphState` gained `english_query`,
+`verification_reason`, `answer_source`. The `verification_reason` field
+is what revealed that the verifier was right and the generator was wrong
+— previously that reason was computed and then discarded.
+
+**`general_fallback_node`** was returning non-answers ("Could you let me
+know a bit more about what you need?") because the raw query was passed
+to the LLM with no framing. Now uses `_GENERAL_FALLBACK_INSTRUCTION`
+(answer directly, don't re-disclaim, don't ask clarifying questions,
+mirror the language). Verified live.
+
+**Query rewriting added to `/api/v1/rag/ask`** (`rag_service.py`) — that
+endpoint previously embedded the raw question with no rewrite.
+
+**Tests:** 96 passing (was 75). New: `test_merge.py` (5),
+`test_query_translation.py` (5), small-talk routing plus "a greeting that
+also asks something still goes through RAG", the `RERANK_ENABLED` switch
+both ways (asserting the reranker model is never even LOADED when off),
+`read_chunks` reading from Postgres, `extract_pages` from bytes, and a
+chunk-settings consistency test. The `CHUNK_SIZE_TOKENS >= 300`
+regression guard was relaxed to `overlap < size` once 100/10 became a
+deliberate choice rather than silent drift.
+
+**Correction to an earlier claim in this log and in `backend/README.md`:**
+upload did NOT write "chunks to PostgreSQL" — there was no chunks table
+at all until this session; Postgres held only a filesystem path.
+
+**Known-stale / not done:**
+
+- `backend/rag_chat_test/main_script/test_runner.py` was NOT modified
+  after the user's explicit "do not touch this python test_runner"
+  instruction; only `input/questions.json` was edited (repeatedly, at
+  user direction).
+- No timeout on the Groq call in `GroqLLMClient.generate_reply()` — a
+  real network hang blocks forever.
+- pypdf mangles curly apostrophes and bullet characters into U+FFFD
+  (visible in stored chunk text); `text_cleaner.py` only normalizes
+  whitespace. Cosmetic for retrieval, but the replacement characters do
+  reach the LLM's context.
+- Conversation history is persisted but never read back into the graph —
+  `initial_state(request.message)` passes only the current message, so
+  every turn is stateless and a follow-up like "and what about earned
+  leave?" has no antecedent.
+- Weaviate `fusion_type` still un-pinned (implicit server default).
+- No re-chunk endpoint: changing `CHUNK_SIZE_TOKENS` still requires
+  delete + re-upload, even though the PDF bytes are now in Postgres and
+  could be re-chunked without the original file. Offered, not built.
+
 
 ### 2026-08-27 — rag_chat_test: added precision@10/recall@10, reranking-method labels, and robustness (rule-compliance) checks
 **By:** Claude (Sonnet 5), this session.
