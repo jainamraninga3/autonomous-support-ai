@@ -80,6 +80,9 @@ _GENERAL_FALLBACK_INSTRUCTION = (
     "assumptions about what's being asked rather than asking the user to clarify. Respond in "
     "the SAME language the question below is written in (Hindi, Gujarati, Marathi, or any "
     "other language) — do not switch to English or any other language.\n\n"
+    "Format the reply as plain Markdown and never emit HTML — no <br>, no <b>. A renderer "
+    "that refuses raw HTML shows those tags literally to the user. Use '-' for bullets, "
+    "prefer short paragraphs and lists over tables, and skip horizontal rules.\n\n"
     "Question: {query}"
 )
 

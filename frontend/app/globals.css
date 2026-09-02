@@ -1,0 +1,74 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  /* Two soft radial washes over near-black, so large empty areas (the
+     console before anything is logged) don't read as a dead panel. */
+  background-color: #070a12;
+  background-image:
+    radial-gradient(65rem 40rem at 12% -10%, rgba(56, 189, 248, 0.1), transparent 60%),
+    radial-gradient(55rem 35rem at 95% 0%, rgba(168, 85, 247, 0.09), transparent 55%);
+  background-attachment: fixed;
+}
+
+/* Slim scrollbars — the default Windows ones are visually heavy next to a
+   dark, dense console. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 163, 184, 0.25) transparent;
+}
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background-color: rgba(148, 163, 184, 0.25);
+  border-radius: 9999px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: rgba(148, 163, 184, 0.4);
+}
+
+@layer components {
+  .panel {
+    @apply rounded-2xl border border-white/10 bg-slate-900/50 backdrop-blur-xl;
+  }
+
+  /* Each button variant repeats the shared utilities rather than
+     @apply-ing a `.btn` class. @apply-ing one custom component class
+     inside another is fragile across Tailwind versions, and a build
+     failure here would be a confusing first-run experience. */
+  .btn-ghost {
+    @apply inline-flex items-center gap-2 rounded-lg border border-white/10 bg-white/5
+           px-3 py-1.5 text-xs font-medium text-slate-300 transition-colors
+           hover:bg-white/10 hover:text-white
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center gap-2 rounded-lg border border-rose-500/30 bg-rose-500/10
+           px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors
+           hover:bg-rose-500/20 hover:text-rose-200
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .btn-warn {
+    @apply inline-flex items-center gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10
+           px-3 py-1.5 text-xs font-medium text-amber-300 transition-colors
+           hover:bg-amber-500/20 hover:text-amber-200
+           disabled:cursor-not-allowed disabled:opacity-40;
+  }
+
+  .badge {
+    @apply inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5
+           text-[10px] font-medium leading-none;
+  }
+}

@@ -36,6 +36,52 @@ class AdminService:
         logger.warning("Postgres reset: %s", " ".join(details))
         return details
 
+    def request_restart(self) -> tuple[bool, list[str]]:
+        """Ask the process to exit so a supervisor restarts it.
+
+        Returns (will_actually_restart, details).
+
+        A process cannot restart itself — something outside it has to
+        start it again. Under `docker compose` the backend service is
+        declared `restart: unless-stopped`, so exiting IS a restart. Run
+        directly with `uvicorn --reload` there is no supervisor, so the
+        same call just stops the server; that is why this reports whether
+        a restart is actually expected rather than claiming success
+        either way.
+
+        The exit is scheduled on the event loop rather than done inline so
+        this HTTP response is delivered first — otherwise the caller sees
+        a connection reset and can't tell "restarting" from "crashed".
+        """
+        import asyncio
+        import os
+        import signal
+
+        supervised = os.environ.get("RUNNING_IN_DOCKER") == "1"
+
+        async def _shutdown() -> None:
+            await asyncio.sleep(0.5)
+            logger.warning("Restart requested via /admin/restart — sending SIGTERM to self")
+            os.kill(os.getpid(), signal.SIGTERM)
+
+        asyncio.get_running_loop().create_task(_shutdown())
+
+        if supervised:
+            details = [
+                "SIGTERM scheduled. Docker will restart the container "
+                "(restart: unless-stopped), so the API should be back within "
+                "a few seconds — the embedding model stays cached in the "
+                "model_cache volume.",
+            ]
+        else:
+            details = [
+                "SIGTERM scheduled, but this process does not look "
+                "supervised (RUNNING_IN_DOCKER is not set), so nothing will "
+                "start it again — the server will simply stop. Start it "
+                "yourself, or run the stack with docker compose.",
+            ]
+        return supervised, details
+
     def reset_vector_store(self) -> list[str]:
         """Deletes and recreates the `DocumentChunk` Weaviate collection,
         discarding every embedded chunk."""

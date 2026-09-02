@@ -71,6 +71,12 @@ services:
       WEAVIATE_HOST: weaviate
       WEAVIATE_PORT: "8080"
       WEAVIATE_GRPC_PORT: "50051"
+      # Tells POST /api/v1/admin/restart that something WILL restart this
+      # process (the `restart: unless-stopped` below), so it can report a
+      # real restart instead of a plain shutdown.
+      RUNNING_IN_DOCKER: "1"
+      # Allow the Next.js dev server. "*" also works for local dev.
+      CORS_ALLOW_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
     ports:
       - "8000:8000"
     depends_on:

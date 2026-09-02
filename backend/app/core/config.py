@@ -29,6 +29,14 @@ class Settings(BaseSettings):
     # --- Logging ---
     LOG_LEVEL: str = "INFO"
 
+    # --- CORS ---
+    # Required for the Next.js frontend (frontend/): a browser refuses a
+    # cross-origin XHR to :8000 from :3000 without these headers, and the
+    # failure looks like a network error with no useful detail in the UI.
+    # Comma-separated, or "*" to allow any origin. "*" is fine for local
+    # development and wrong for anything public — this API has no auth.
+    CORS_ALLOW_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+
     # --- PostgreSQL (application database, runs via Docker) ---
     POSTGRES_HOST: str = "localhost"
     POSTGRES_PORT: int = 5432
@@ -51,6 +59,14 @@ class Settings(BaseSettings):
     GROQ_API_2: str = ""
     GROQ_API_3: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-120b"
+
+    @property
+    def cors_allow_origins(self) -> list[str]:
+        """Parsed `CORS_ALLOW_ORIGINS`. `["*"]` allows any origin."""
+        raw = self.CORS_ALLOW_ORIGINS.strip()
+        if raw == "*":
+            return ["*"]
+        return [origin.strip() for origin in raw.split(",") if origin.strip()]
 
     @property
     def groq_api_keys(self) -> list[str]:
