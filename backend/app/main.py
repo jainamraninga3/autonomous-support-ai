@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import admin, chat, documents, health, logs, rag
+from app.api.routes import admin, chat, documents, health, logs
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
@@ -59,7 +59,6 @@ register_exception_handlers(app)
 
 app.include_router(health.router)
 app.include_router(chat.router, prefix=settings.API_V1_PREFIX)
-app.include_router(rag.router, prefix=settings.API_V1_PREFIX)
 app.include_router(documents.router, prefix=settings.API_V1_PREFIX)
 app.include_router(admin.router, prefix=settings.API_V1_PREFIX)
 app.include_router(logs.router, prefix=settings.API_V1_PREFIX)

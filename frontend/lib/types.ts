@@ -29,10 +29,16 @@ export interface ChatResponse {
 
 /** Which branch of the graph produced the reply. */
 export type AnswerSource =
-  | "off_topic_refusal"
-  | "small_talk"
+  /** Grounded in the documents and verified against them. */
   | "rag"
-  | "general_fallback";
+  /** Not a company question — politely declined, with no LLM call at all. */
+  | "off_topic"
+  /** A company question the documents didn't cover. */
+  | "general_fallback"
+  /** The documents produced an answer, but verification couldn't confirm it. */
+  | "unverified_fallback"
+  /** A greeting, a thank-you, or a question about the assistant itself. */
+  | "small_talk";
 
 export interface HealthResponse {
   status: string;

@@ -20,15 +20,24 @@ const SOURCE_STYLES: Record<AnswerSource, { label: string; className: string; hi
     className: "border-amber-500/30 bg-amber-500/10 text-amber-300",
     hint: "Nothing relevant was found in your documents, so this is NOT sourced from them.",
   },
-  small_talk: {
-    label: "small talk",
-    className: "border-sky-500/30 bg-sky-500/10 text-sky-300",
-    hint: "A greeting — answered directly, no retrieval ran.",
+  unverified_fallback: {
+    label: "unverified",
+    className: "border-orange-500/30 bg-orange-500/10 text-orange-300",
+    hint:
+      "Your documents mention this, but the answer couldn't be confirmed against them, " +
+      "so it was answered from general knowledge instead. Don't treat it as policy.",
   },
-  off_topic_refusal: {
-    label: "off topic",
-    className: "border-slate-500/30 bg-slate-500/10 text-slate-300",
-    hint: "Judged unrelated to your documents. Your message was never sent to the LLM.",
+  off_topic: {
+    label: "out of scope",
+    className: "border-slate-500/30 bg-slate-500/10 text-slate-400",
+    hint:
+      "Not a company question, so it was declined. Your message was never sent to the " +
+      "language model — that's the boundary that stops this being used as a general chatbot.",
+  },
+  small_talk: {
+    label: "chat",
+    className: "border-sky-500/30 bg-sky-500/10 text-sky-300",
+    hint: "A greeting or a question about the assistant — answered directly, no retrieval ran.",
   },
 };
 

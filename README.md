@@ -104,9 +104,11 @@ what you got: `answer_source`, `rewritten_query`, `english_query`,
 observability is not decoration — it is what identified two real bugs that
 guesswork had missed.
 
-**`POST /api/v1/rag/ask`** shares the front gate and rewriting but skips
-verification and the fallback, and exposes `limit` / `alpha` / `rerank` /
-`top_k` per request. It is the tuning endpoint; `/chat` is the product.
+`/api/v1/chat` is the only RAG endpoint. A second one
+(`POST /api/v1/rag/ask`) used to exist for retrieval tuning; its
+`limit` / `alpha` / `rerank` / `top_k` knobs are now optional fields on
+the chat request, so there is one code path instead of two that had
+drifted apart. Omit them for the configured defaults.
 
 ---
 
@@ -199,7 +201,7 @@ hardcoded.
 | `CHUNK_OVERLAP_TOKENS` | `10` | must be less than chunk size |
 | `EMBEDDING_MODEL_NAME` | `BAAI/bge-m3` | multilingual; 1024-dim |
 | `RERANKER_MODEL_NAME` | `BAAI/bge-reranker-v2-m3` | |
-| `RERANK_ENABLED` | `false` | measured as not worth its latency on this corpus; also the default for `/api/v1/rag/ask`'s `rerank` field |
+| `RERANK_ENABLED` | `false` | measured as not worth its latency on this corpus; also the default for the chat request's `rerank` field |
 | `RERANK_TOP_K` | `10` | chunks passed to generation |
 | `LOG_LEVEL` | `INFO` | |
 | `DEBUG` | `true` | `true` echoes all SQL |
@@ -252,8 +254,7 @@ OCR, so an image-based PDF ingests as zero chunks — in any language.
 | method | path | purpose |
 | --- | --- | --- |
 | `GET` | `/health` | app + PostgreSQL + Weaviate connectivity |
-| `POST` | `/api/v1/chat` | the full workflow; persists the conversation |
-| `POST` | `/api/v1/rag/ask` | tuning endpoint: exposes `limit`/`alpha`/`rerank`/`top_k` |
+| `POST` | `/api/v1/chat` | the full workflow; persists the conversation. Optional `limit`/`alpha`/`rerank`/`top_k` override retrieval per request |
 | `POST` | `/api/v1/documents/upload` | extract + chunk + store (no embedding) |
 | `POST` | `/api/v1/documents/{id}/ingest` | embed into Weaviate (`?force=true` to re-embed) |
 | `GET` | `/api/v1/documents` | list documents, versions, and whether each is embedded |
@@ -457,18 +458,16 @@ the cross-encoder pass. The model and code are untouched; set it to
 `true` to restore it. A larger or more heterogeneous corpus could easily
 flip this conclusion — re-measure before trusting it there.
 
-`/api/v1/rag/ask` has its own per-request `rerank` field. Omit it (or
-send `null`) to follow `RERANK_ENABLED`; send `true`/`false` to override
-for one call. **Swagger prefills `"rerank": true` from the schema
-example** — delete that line unless you actually want reranking, or the
-first such call will download the ~2.3GB reranker model and appear to
-hang for several minutes.
+The chat request has a per-request `rerank` field. Omit it (or send
+`null`) to follow `RERANK_ENABLED`; send `true`/`false` to override for
+one call. The first `true` downloads the ~2.3GB reranker model, which
+looks like a hang for several minutes.
 
 ### `alpha`
 
 `alpha` balances BM25 (`0.0`) against dense vector search (`1.0`); `0.5`
 is a neutral default, not tuned. Adjustable per request on
-`/api/v1/rag/ask`. Note that a Devanagari or Kannada query has no lexical
+`/api/v1/chat`. Note that a Devanagari or Kannada query has no lexical
 overlap with an English document, so BM25 contributes little for those —
 which is what the dual-language retrieval pass compensates for.
 
@@ -508,6 +507,8 @@ Run from `backend/` with the venv active. These need Option B (local)
 setup, not Docker.
 
 ```powershell
+python -m scripts.ingest_folder ..\policy            # upload AND ingest a whole folder
+python -m scripts.ingest_folder --verify-only        # what's ingested, in both stores
 python -m scripts.ingest_document path\to\file.pdf [--force]
 python -m scripts.embed_document <document_id> [--version N]
 python -m scripts.search "your query" [--limit 30] [--alpha 0.5] [--rerank [--top-k 10]]

@@ -48,6 +48,15 @@ verification, a scoped general-knowledge fallback, and an off-topic
 refusal boundary) — see "Explicitly NOT implemented yet" below for
 what's deliberately still missing.
 
+**Also live as of 2026-09-03:** a **Next.js 15 frontend**
+(`frontend/`, 60% chat / 40% live console log, with reset and restart
+buttons) — see its Change Log entry; **conversation history** (the last
+6 turns feed `classify` and `rewrite`, so follow-up questions resolve);
+and the **off-topic boundary restored** after being briefly removed —
+maths, coding, and general-knowledge questions get a fixed polite
+decline with NO LLM call, because this is a company policy assistant and
+the LLM never seeing the message is what makes the boundary hold.
+
 **Also live-verified as of 2026-09-01:** multilingual Q&A (ask in Hindi,
 Gujarati, Marathi, Kannada, or Hinglish against English-only documents
 and get a correct, cited answer in the language you asked — no
@@ -93,25 +102,33 @@ was done.
 
 **Working endpoints:**
 - `GET /health` — reports app status + PostgreSQL + Weaviate connectivity
-- `POST /api/v1/chat` — runs the full LangGraph workflow: `classify` ->
-  GENERAL is a fixed OUT-OF-SCOPE REFUSAL (no LLM call at all for that
-  branch — a deliberate security boundary, changed 2026-08-27, see Change
-  Log) -> or SMALL_TALK (added 2026-09-01: a bare greeting gets a short
-  conversational reply, no retrieval) -> or RAG_REQUIRED -> rewrite (+ an
-  English translation for a second retrieval pass, added 2026-09-01) ->
+- `POST /api/v1/chat` — runs the full LangGraph workflow: `classify`
+  (fed the last 6 turns of the session since 2026-09-03, so follow-up
+  pronouns like "where is it located?" resolve) ->
+  GENERAL is a fixed, POLITELY WORDED OUT-OF-SCOPE DECLINE (no LLM call
+  at all for that branch — a deliberate misuse/prompt-injection
+  boundary, added 2026-08-27, briefly removed, restored 2026-09-03; see
+  Change Log) -> or SMALL_TALK (added 2026-09-01: a bare greeting gets a
+  short conversational reply, no retrieval) -> or RAG_REQUIRED -> rewrite
+  (also history-aware; + an English translation for a second retrieval
+  pass, added 2026-09-01) ->
   retrieve -> generate -> (answerable? verify : disclosed
   general-knowledge fallback). The response now also carries
   `rewritten_query`, `english_query`, `retrieved_chunk_count`,
   `verified`, `verification_reason`, and `answer_source`
-  (`off_topic_refusal`/`small_talk`/`rag`/`general_fallback`) — added
+  (`rag`/`off_topic`/`small_talk`/`general_fallback`/
+  `unverified_fallback` — renamed and split 2026-09-03) — added
   2026-09-01 for diagnosability, and directly responsible for correctly
   diagnosing two failures that prompt-only guessing had missed. Persists
   both the user message and the final reply to PostgreSQL
   (`chat_sessions` / `messages`); `conversation_id` semantics unchanged
   (session UUID, reuse to continue a session; omit or send `null` for a
   new one — do NOT send Swagger's literal placeholder text `"string"`).
-  Response has a `citations` field (empty for GENERAL-refusal and
-  general-fallback replies — neither is sourced from documents).
+  Response has a `citations` field (empty for the off-topic decline and
+  for both fallback paths — none is sourced from documents; note this
+  makes the `rag_chat_test` harness compute `precision@10 = 0` for a
+  question whose answer was rejected by the verifier, so the reported
+  P@10 is a FLOOR, not the retriever's true precision).
   **Verified live repeatedly**, most recently 2026-08-27: "what is 2+2"
   -> fixed refusal (previously incorrectly answered "2+2=4"); "How many
   casual leave days..." -> "7 days per annum." with a real citation;
@@ -120,13 +137,10 @@ was done.
   refusal. See Change Log for the full history (classify/rewrite/
   retrieve/generate/verify was independently verified live 2026-08-26
   via console-log call-sequence tracing).
-- `POST /api/v1/rag/ask` — as of 2026-09-01 this shares the graph's
-  FRONT GATE (classify -> small talk / off-topic refusal / RAG) and does
-  query rewriting; it still has no verification and no general-knowledge
-  fallback, so it remains the lower-level tuning endpoint (it alone
-  exposes `limit`/`alpha`/`rerank`/`top_k` per request). Response carries
-  `rewritten_query`, `english_query`, and `classification`.
-  **Verified live repeatedly** across this
+- `POST /api/v1/rag/ask` — **REMOVED 2026-09-02**, merged into
+  `/api/v1/chat`, which now takes optional `limit`/`alpha`/`rerank`/
+  `top_k` fields. There is one RAG code path. It had been
+  **verified live repeatedly** across this
   project (e.g. as part of the Documents API upload/ingest verification
   2026-08-26, and directly during the "collection doesn't exist" auto-
   ingest bug investigation the same day) — real hybrid search + rerank +
@@ -138,6 +152,11 @@ was done.
   real grounded `/api/v1/chat` answer proving retrieval works off the
   new path). `DELETE /api/v1/documents/{id}` wired + unit-tested but not
   yet live-verified (destructive, deferred until the user asks for it).
+- `GET /api/v1/logs` — byte-cursor tail of the rotating log file, added
+  2026-09-02 to feed the frontend's console pane. Pass the previous
+  response's `cursor` to get only what is new; the server clamps a
+  cursor past the file's end (log rotation) back to a safe offset
+  instead of erroring.
 - `POST /api/v1/admin/reset/postgres`, `/vector-store`, `/all` —
   destructive dev-only data reset, no auth. **Verified live 2026-08-26**
   — real console log confirmed `DELETE FROM documents`/`chat_sessions`
@@ -426,25 +445,22 @@ API (routes, no business logic) -> Service -> Repository / Database
                                             -> LangGraph workflow (app/graph) -> LLM abstraction -> provider
                                                                                -> RAG pipeline (app/rag)
 ```
-`/api/v1/chat` now goes through the graph; `/api/v1/rag/ask` calls the
-RAG pipeline functions directly (bypassing the graph, no
-classification) — both are legitimate, intentionally different entry
-points, not a case of one being stale.
+`/api/v1/chat` goes through the graph, and since the 2026-09-02 merge
+it is the ONLY HTTP path into the RAG pipeline. The `scripts/` CLI tools
+still call the pipeline functions directly, bypassing the graph — that
+is deliberate (they are tuning tools), not a stale duplicate.
 
 **Explicitly NOT implemented yet** (do not build until asked — see
 `plan.md` section "Deferred"/"V1 Features" for the full order):
 table extraction, header/footer detection, contextual chunking,
 parent-child retrieval, metadata filtering (ACL/tenant — the `filters`
 param exists on `hybrid_search()` but nothing populates tenant/ACL
-properties yet), conversation history feeding retrieval (each chat turn
-is independent — the graph has no memory of earlier turns in the same
-session yet, even though they're persisted), full background-ingestion
+properties yet), full background-ingestion
 job tracking (`upload_jobs` is still schema-only — upload/ingest are
 synchronous HTTP calls for now, not a background job queue), a
 regenerate loop on a failed verification (current behavior: refuse, not
 retry — plan.md's diagram allows either), evaluation, tracing/metrics,
-rate limiting, auth/authz, tenant isolation, MCP, CrewAI, DSPy, frontend,
-Redis.
+rate limiting, auth/authz, tenant isolation, MCP, CrewAI, DSPy, Redis.
 (PDF ingestion, chunking, document dedup/versioning, BGE-M3 embeddings,
 hybrid search, reranking, context construction, grounded answer
 generation with citations, query classification, query rewriting, AND
@@ -453,24 +469,23 @@ Change Log. OCR was implemented on 2026-08-25 and then fully removed on
 2026-08-26 at the user's request — see both entries; scanned/image-based
 PDFs are simply not supported.)
 
-**HTTP endpoint for the RAG pipeline:** `POST /api/v1/rag/ask`
-(`backend/app/api/routes/rag.py` → `RagQueryService`
-(`backend/app/services/rag_service.py`)) exposes the same retrieval →
-optional rerank → grounded-answer flow as `scripts.ask` over HTTP — the
-CLI-only gap noted above is closed. **Verified live** (see "Working
-endpoints" above for the summary; wired + unit-tested with fakes too).
-The Weaviate client is opened once at app startup (`app.main`'s
-`lifespan`, stored on `app.state.weaviate_client`) rather than per
-request — a deliberate departure from the CLI scripts, which open/close
-a client per invocation; that pattern doesn't scale to a long-lived
-server process.
+**One HTTP entry point for RAG:** `POST /api/v1/chat`. There used to be
+a second, `POST /api/v1/rag/ask`, exposing retrieval → optional rerank →
+grounded answer without classification, verification, or persistence; it
+was **merged into `/chat` on 2026-09-02** and its `limit`/`alpha`/
+`rerank`/`top_k` knobs are now optional `ChatRequest` fields. Nothing was
+lost — it had strictly fewer features. The Weaviate client is opened
+once at app startup (`app.main`'s `lifespan`, stored on
+`app.state.weaviate_client`) rather than per request — a deliberate
+departure from the CLI scripts, which open/close a client per
+invocation; that pattern doesn't scale to a long-lived server process.
 
 **Key config:** `backend/app/core/config.py` (`Settings`) reads everything
 from env vars — `backend/.env` (local, gitignored) /
 `backend/.env.example` (committed template). Var names as of now:
 `ENVIRONMENT`, `POSTGRES_HOST/PORT/USER/PASSWORD/DB`,
 `WEAVIATE_HOST/PORT/GRPC_PORT`, `GROQ_API_KEY`/`GROQ_API_1`/`_2`/`_3`,
-`GROQ_MODEL`, `CHUNK_SIZE_TOKENS`(100)/`CHUNK_OVERLAP_TOKENS`(20),
+`GROQ_MODEL`, `CHUNK_SIZE_TOKENS`(100)/`CHUNK_OVERLAP_TOKENS`(10),
 `DOCUMENTS_DIR`, `PROCESSED_DATA_DIR`. All 4 Groq keys are set in
 `backend/.env` (the user's own, not recorded anywhere in this log) —
 `GROQ_API_KEY` alone verified live 2026-08-25; the 3-key fallback added
@@ -479,17 +494,22 @@ limit.
 
 **Folders that exist but are intentionally empty scaffolding** (for later
 phases — do not fill them speculatively): `app/agents/`, `app/crew/`,
-`app/dspy/`, `app/mcp/`, `app/observability/`, `mcp-servers/`,
-`frontend/`. (`app/rag/` and `app/models/` are NOT in this category
+`app/dspy/`, `app/mcp/`, `app/observability/`, `mcp-servers/`.
+(`frontend/` LEFT this category 2026-09-02 — it is now a real Next.js 15
+app, see its own entry below. `app/rag/` and `app/models/` are NOT in this
+category
 anymore — both are now heavily used: `app/rag/` holds ingestion,
 retrieval, reranking, generation, classification, query rewriting, and
 embeddings; `app/models/` holds the actively-used `Document`/
 `DocumentVersion`/`ChatSession`/`Message` ORM models.)
 
-**Docker:** `docker-compose.yml` at repo root runs ONLY `postgres` +
-`weaviate`. The backend runs locally from `backend/.venv`, not in a
-container, for this phase (a `Dockerfile` exists for later use but no
-compose service currently builds it). Postgres is published on host port
+**Docker:** `docker-compose.yml` at repo root runs `postgres` +
+`weaviate` + `backend` — `docker compose up --build` starts the whole
+stack and applies migrations (verified live 2026-09-01). Running the
+backend locally from `backend/.venv` against the Docker databases still
+works and is how most live verification in this log was done. The
+frontend is NOT containerised; run it with `npm run dev`. Postgres is
+published on host port
 **5433** (not the default 5432) — this machine has another, unrelated
 Postgres already bound to 5432 (confirmed via `netstat`), so 5432 was
 reassigned to avoid silently connecting to the wrong database. Weaviate
@@ -498,6 +518,255 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 ---
 
 ## Change Log (newest first)
+
+### 2026-09-03 — Off-topic boundary restored; fallback restrained; Next.js frontend; PDF text-extraction research (deferred)
+**By:** Claude (Opus 5), this session.
+**Why:** The user is shipping this to company employees and asked for the
+misuse boundary back ("people can misuse by sending maths, any other
+question... this is made for company"). Plus a frontend, and a decision
+on what to do about the screenshot-only PDFs.
+
+**The off-topic boundary is back, and it is not a prompt.** Earlier this
+session it had been REMOVED at the user's request (they disliked the old
+refusal wording: "why the user need to know about this"). It is now
+restored, with the wording fixed instead of the boundary dropped:
+- `app/rag/classification.py` — three categories again, and the prompt
+  now states the assistant's actual job up front ("answers ONLY from the
+  company's own internal documents... It is not a general-purpose
+  assistant"). GENERAL is decisive on purpose: *a maths or coding request
+  is GENERAL even if framed as work-related* ("write me a SQL query for
+  our report"). Without that line the classifier let work-flavoured
+  coding through.
+- `app/graph/workflow.py` — `general_node` makes **NO LLM call**. That is
+  the point, and there is now a module docstring saying so: this is the
+  misuse AND prompt-injection boundary, and it only holds because the
+  message never reaches the model. A prompt instruction not to do maths
+  can be argued with; a code path that never calls the model cannot.
+- `answer_source` for that path is `off_topic` (was
+  `off_topic_refusal`). `unverified_fallback` was split out from
+  `general_fallback` so a verifier rejection is distinguishable from
+  "the documents didn't cover it".
+- The decline text itself is warm and says what the bot IS for, not what
+  it refuses: "I'm the assistant for our company's policies and
+  documents — things like leave, travel, reimbursements, IT rules...
+  Ask me anything about how things work here."
+
+**The general-knowledge fallback was writing fake policy — restrained.**
+`app/rag/generation/general_answer.py` is now single-purpose (company
+questions the documents couldn't answer) and its prompt starts "Reply
+BRIEFLY and honestly. A few sentences."
+
+Measured failure it exists to prevent, not a hypothetical: asked what the
+company covers for relocation, the old unrestrained prompt produced ~700
+words on typical relocation coverage — weight limits, temporary housing,
+lump-sum allowances — rated a **HIGH hallucination risk** by the
+evaluation harness. A second instance invented "1,500 to 3,500 rupees per
+day" and "$100 to $200 per day (U.S. GSA rates)" for a daily-allowance
+question. Both read exactly like real policy, and a one-line disclaimer
+above them does not fix that. The prompt now forbids invented limits,
+amounts, day counts, eligibility tiers, notice periods, and approval
+steps, and explicitly says that answering only "it isn't in the
+documents, please check with HR" is a GOOD answer here, not a failure.
+
+**Generator rule added: adjacent figures.** `answer_generator.py` — if
+the EXACT thing asked for isn't in the context but closely related
+figures are, give those and name the difference, rather than claiming
+absence. Came from a real failure: asked for the daily *allowance*, the
+generator said nothing was stated while the context held per-day
+*accommodation* limits.
+
+**`frontend/` — a real Next.js 15 app** (was empty scaffolding). App
+Router + TypeScript + Tailwind 3.4. Layout is 60% chat / 40% live
+console, per the user's spec. `components/` — `ChatPanel`,
+`MessageBubble` (badges per `answer_source`, including "out of scope"),
+`ConsolePanel` (cursor-based polling of `GET /api/v1/logs`, with a
+follow-tail toggle), `Toolbar` (reset Postgres / reset Weaviate / reset
+all / restart server / refresh chat), `Markdown`. `lib/` — `api.ts`,
+`types.ts`, `useConsole.ts`, `markdown.ts`.
+
+Deliberately NO upload UI: the user does uploads from Swagger and asked
+for the frontend to stay a chat client.
+
+**Answers were rendering raw Markdown — fixed.** Tables came through as
+literal pipe characters, `---` as dashes, and `<br>` as visible text.
+Two halves to the fix: `react-markdown` + `remark-gfm` on the frontend,
+and a formatting rule in the generator prompts (`answer_generator.py`,
+`general_answer.py`) that says **plain Markdown only, never HTML** —
+a renderer that refuses raw HTML shows those tags literally, so the
+model must not emit them.
+
+**`rag_chat_test/input/questions.json` trimmed to the failing set.**
+Was 20 questions; now holds ONLY 14 (relocation, cross-document) and 18
+(Hinglish daily allowance), at the user's request — the other 18 pass and
+re-running them costs Groq tokens for no information. The full 20 are
+reconstructible from the `_comment` field's group descriptions if a
+regression sweep is ever wanted. The harness's robustness check learned
+`off_topic` and `fallback_sources = {"general_fallback",
+"unverified_fallback"}`.
+
+**Result of the re-run: Q14 fixed, Q18 not measured.** Q14 went to
+`answer_source: rag`, verified, overall 9/10, 10 citations — it now keeps
+the two relocation policies distinct (new-joiner hotel stay and
+relocation leave labelled as new-joiner-only) instead of blending them.
+Q18 came back at 5/10 with the invented per-diem figures above — but
+`curl http://localhost:8000/openapi.json` showed the running backend
+advertising `general_knowledge` and NOT `off_topic`, i.e. **it was
+running pre-change code**. Neither the restrained fallback nor the
+adjacent-figures rule was actually under test. Recorded here as an open
+item, not as a result.
+
+**Open bug spotted in the same run:** the verifier rejected Q18's answer
+for being INCOMPLETE ("the context also includes travel-desk rules,
+accommodation..."), which its own prompt says is not a grounding
+failure. A verifier that rejects for incompleteness pushes good grounded
+answers into the fallback path — the exact failure mode this entry is
+about. Not yet fixed; `app/rag/generation/verification.py`.
+
+**PDF text extraction from image-only pages — researched, deferred.**
+The user asked whether OCR or something else should handle the pages
+`pypdf` gets nothing from. Findings:
+- 24 of 30 policy PDFs have a real text layer and are fine. **6 do not**
+  — the Darwinbox user manuals, at 0.2–1.0 chunks/page, because their
+  pages are screenshots of the app.
+- Verified this is real content loss, by extracting and visually
+  inspecting page 12 of
+  `1739772147_Amnex_Darwin_Leave_Attendance_Holiday_-_User_Manual.pdf`.
+  It contains the complete leave-type dropdown — including **Pandemic**
+  — and "pandemic" appears in **0 of 481 indexed chunks**. So a real
+  leave type is unanswerable.
+- **Conclusion: use a vision model to DESCRIBE the page in prose, not an
+  OCR engine to transcribe it.** Tesseract/PaddleOCR read screenshots
+  very accurately; the problem is the shape of the output — a bag of
+  disconnected UI labels (`Leave Type`, `From Date`, `Apply`) that
+  embeds and retrieves badly. (An earlier claim in this session that OCR
+  would be *inaccurate* here was wrong and is corrected.)
+- Recommended stack: **Groq Llama 4 Scout** vision (client, key, and
+  retry logic already exist — no new vendor) + **`pypdfium2`** to
+  rasterise (BSD/Apache; PyMuPDF rejected because it is AGPL), gated on
+  the existing `MIN_CHUNKS_PER_PAGE = 1.2` density metric in
+  `scripts/ingest_folder.py` so the 24 good documents never make a
+  vision call. ~$0.04 for all 93 thin pages, one time.
+- **NOT IMPLEMENTED, and blocked on a user decision.** Those screenshots
+  contain real PII — employee names, employee IDs, an email address,
+  individual leave balances. Describing the pages verbatim writes that
+  into Weaviate where the bot can retrieve and repeat it. Proposed
+  mitigation was to prompt for structure-and-options rather than sample
+  data, plus regex-redact employee-ID and email patterns as a backstop.
+  The user deferred on 2026-09-03 ("will do this later, no urgent").
+  `app/rag/ingestion/pdf_extractor.py` remains pypdf-only.
+- Consequence to expect meanwhile: questions about the Darwinbox app
+  ("how do I apply for leave in the mobile app?") will keep falling
+  back. That is correct behaviour — the content genuinely is not
+  indexed.
+
+**Correction to an earlier claim made in this session:** the 6 screenshot
+manuals were once described as being able to "never answer anything".
+That was too strong — their caption strips DO carry some of the
+procedure. What they lose is everything rendered inside the screenshots.
+
+**Tests:** 106 passing (was 103). New: `tests/unit/test_logs_route.py`
+(7 cases, including the cursor-past-EOF clamp). `test_graph.py` and
+`test_classification.py` updated for the three-way classification and
+the `off_topic` source.
+
+**Known gaps deliberately left open** (recorded so they are not
+rediscovered as surprises): no timeout on the Groq call in
+`GroqLLMClient.generate_reply()`; `pypdf` mangles curly quotes and
+bullets to U+FFFD and runs words together ("Attendanceto",
+"LeaveEntry"); Weaviate `fusion_type` is not pinned; `DEBUG=true` logs
+every SQL statement twice.
+
+**Still to do next session:** restart the backend so the newest code is
+live (`uvicorn app.main:app --reload` from `backend/` — `docker compose
+up --build` is currently blocked by a Docker Hub DNS failure on this
+machine, unrelated to this project), confirm with
+`curl -s http://localhost:8000/openapi.json | findstr /C:"off_topic"`,
+then re-run the 2-question set.
+
+
+### 2026-09-02 — /rag/ask merged into /chat; folder-ingest script; stale-version prune
+**By:** Claude (Opus 5), this session.
+**Why:** User asked to combine the two RAG endpoints into one, then for a
+one-command way to ingest a whole folder of policy PDFs.
+
+**Two RAG endpoints became one.** `POST /api/v1/rag/ask` is gone; its
+`limit`/`alpha`/`rerank`/`top_k` knobs are now optional fields on
+`ChatRequest`, each defaulting to `None` = "use the configured value", so
+a plain `{"message": "..."}` behaves exactly as before. The two paths had
+drifted into behaving differently for no good reason —`/rag/ask` had
+strictly FEWER features (no verification, no disclosed fallback, no
+persistence), so nothing was lost by folding it in.
+- Deleted: `app/api/routes/rag.py`, `app/services/rag_service.py`,
+  `tests/unit/test_rag_service.py`, `get_rag_query_service` from
+  `app/api/dependencies.py`, and the `RagAskRequest`/`RagAskResponse`
+  schemas. `app/schemas/rag.py` survives holding only
+  `CitationResponse`, which chat responses use.
+- `app/graph/state.py` — `GraphState` and `initial_state()` gained
+  `limit`/`alpha`/`rerank`/`top_k`.
+- `app/graph/workflow.py` — `retrieve_node` reads them, falling back to
+  30 / 0.5 / `RERANK_TOP_K` / `RERANK_ENABLED`.
+- **Two behaviour changes worth knowing.** (1) `classification` is no
+  longer in the response: it was redundant with `answer_source`, which
+  says the same thing more precisely. (2) "No documents ingested" no
+  longer returns 404 — `/rag/ask` raised 404 for a missing collection and
+  503 for unreachable Weaviate; the graph degrades to the disclosed
+  general-knowledge fallback instead so a chat UI stays usable. To stop
+  that looking like poor retrieval, `retrieve_node` now logs a WARNING
+  naming the real cause ("collection does not exist — no documents have
+  been ingested yet").
+- Verified against the app's own generated OpenAPI: 12 paths, no `rag`
+  path, `ChatRequest` carries the four new fields.
+
+**`backend/scripts/ingest_folder.py` — new.** Upload AND ingest every PDF
+in a folder in one command: `python -m scripts.ingest_folder ../policy`.
+Talks to the running API over HTTP (upload -> ingest, per file), so it
+works identically against a Docker or a local backend and needs no
+database credentials.
+
+Deliberately a script and not a batch endpoint. A batch endpoint was
+built earlier in this session and removed at the user's request: as one
+HTTP request it took minutes and reported nothing until it finished,
+which is worse than N quick calls you can watch. The script prints each
+file's result as it completes, and Ctrl+C loses only the file in flight.
+
+It ends with a cross-store verification (on by default, or
+`--verify-only`): every document/version from `GET /api/v1/documents`
+with its live `is_embedded` flag, plus per-document chunk counts read
+from Weaviate's GraphQL aggregate. **It also calls out any file that
+extracted to ZERO chunks** — with no OCR, a scanned PDF ingests
+"successfully" and then can never be retrieved or cited, which is
+otherwise silent. Real-world policy folders (exported PPTs, scanned
+manuals) hit this.
+
+**Stale-version chunks were accumulating in Weaviate — fixed.** Chunk
+objects are keyed by `uuid5(document_id:version:chunk_index)`, so
+embedding a NEW version wrote new objects and left the old version's
+behind forever. Retrieval does not filter by version, so stale text kept
+competing with current text in every search and the collection grew on
+each re-process — both a correctness and a performance bug.
+`DocumentService.ingest()` now calls
+`_drop_other_versions_from_weaviate()` after a successful embed. A failed
+prune is logged, not raised: the embedding succeeded, and the worst case
+is the stale chunks it already had. Two tests.
+
+**Docs:** every `/rag/ask` reference in `README.md` and
+`backend/README.md` corrected or removed; both now document the merged
+knobs and the folder script. **Historical Change Log entries below keep
+their original text — they describe the endpoint as it was.**
+
+**Batch endpoint (added then removed this session).** For the record,
+since it appears in git history: `POST /api/v1/documents/upload-and-ingest`
+accepted up to 100 files and embedded each one inline. Removed at user
+request in favour of one-at-a-time uploads plus the script above. Its
+schemas, service method, and tests were removed with it; removal verified
+against the generated OpenAPI spec.
+
+**Tests:** 103 passing. Removed `test_rag_service.py` (10 cases) and
+replaced its unique coverage with graph-level tests: per-request
+`limit`/`alpha`/`top_k` reaching `hybrid_search`, `rerank: true`
+overriding a disabled default, and a missing collection degrading rather
+than raising.
+
 
 ### 2026-09-01 (latest) — `/api/v1/rag/ask` ignored RERANK_ENABLED; Alembic and full-stack Docker now both verified live
 **By:** Claude (Opus 5), same session.

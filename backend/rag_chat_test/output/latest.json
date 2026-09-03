@@ -1,0 +1,561 @@
+{
+  "summary": {
+    "total_questions": 2,
+    "success_count": 2,
+    "timeout_count": 0,
+    "error_count": 0,
+    "avg_response_time_seconds": 13.317,
+    "min_response_time_seconds": 9.9,
+    "max_response_time_seconds": 16.735,
+    "median_response_time_seconds": 13.317,
+    "avg_relevance_score": 8.5,
+    "avg_groundedness_score": 5.5,
+    "avg_completeness_score": 6.5,
+    "avg_clarity_score": 8.5,
+    "avg_overall_score": 7,
+    "hallucination_risk_breakdown": {
+      "low": 1,
+      "medium": 1
+    },
+    "avg_overall_score_by_expected_type": {
+      "covered": 7
+    },
+    "avg_overall_score_note": "The blended avg_overall_score above mixes 'covered' questions (where a real grounded answer is expected) with 'off_topic'/'uncovered' ones (where refusing or disclosing is the CORRECT behavior, but the judge doesn't know that and scores it low). avg_overall_score_by_expected_type separates these — judge 'covered' answer quality using its own number, not the blended one.",
+    "chat_pipeline_precision_at_10": 0.45,
+    "chat_pipeline_recall_at_10": 0.5,
+    "chat_pipeline_precision_recall_question_count": 2,
+    "robustness_summary": {
+      "total_checked": 2,
+      "total_passed": 1,
+      "total_failed": 1,
+      "by_expected_type": {
+        "covered": {
+          "passed": 1,
+          "failed": 1,
+          "total": 2,
+          "rate": 0.5
+        }
+      }
+    },
+    "rerank_variant_comparison": {
+      "no_rerank__hybrid_0.5": {
+        "reranking_method": "Hybrid search (alpha=0.5), no reranking",
+        "avg_overall_score": null,
+        "avg_response_time_seconds": null,
+        "times_best_for_a_question": 0,
+        "avg_precision_at_10": null,
+        "avg_recall_at_10": null
+      },
+      "rerank__hybrid_0.5": {
+        "reranking_method": "Hybrid search (alpha=0.5) + BGE-Reranker-v2-M3",
+        "avg_overall_score": null,
+        "avg_response_time_seconds": null,
+        "times_best_for_a_question": 0,
+        "avg_precision_at_10": null,
+        "avg_recall_at_10": null
+      },
+      "rerank__vector_only_1.0": {
+        "reranking_method": "Vector-only search + BGE-Reranker-v2-M3",
+        "avg_overall_score": null,
+        "avg_response_time_seconds": null,
+        "times_best_for_a_question": 0,
+        "avg_precision_at_10": null,
+        "avg_recall_at_10": null
+      },
+      "rerank__bm25_only_0.0": {
+        "reranking_method": "BM25-only search + BGE-Reranker-v2-M3",
+        "avg_overall_score": null,
+        "avg_response_time_seconds": null,
+        "times_best_for_a_question": 0,
+        "avg_precision_at_10": null,
+        "avg_recall_at_10": null
+      },
+      "chat_pipeline (/api/v1/chat)": {
+        "reranking_method": null,
+        "avg_overall_score": null,
+        "avg_response_time_seconds": null,
+        "times_best_for_a_question": 2,
+        "avg_precision_at_10": null,
+        "avg_recall_at_10": null
+      }
+    },
+    "total_run_time_seconds": 29.847,
+    "run_started_at": "2026-09-02T10:55:57.372219+00:00",
+    "run_finished_at": "2026-09-02T10:56:27.220104+00:00",
+    "target_api": "http://localhost:8000/api/v1/chat",
+    "judge_model": "openai/gpt-oss-120b",
+    "per_question_timeout_seconds": null
+  },
+  "results": [
+    {
+      "question_id": 14,
+      "question": "I am relocating for work. What does the company cover, and is it different for a new joiner?",
+      "conversation_id_used": null,
+      "status": "SUCCESS",
+      "http_status": 200,
+      "response_time_seconds": 16.735,
+      "started_at": "2026-09-02T10:55:57.372219+00:00",
+      "finished_at": "2026-09-02T10:56:14.107936+00:00",
+      "error": null,
+      "answer": "**What the company will reimburse for a relocation**\n\n- **Household move** – transportation of your household items from your current base location to the new work location.  \n- **Vehicle transport** – one car and one two‑wheeler:\n  - If you use a mover‑packer, you are reimbursed the actual invoice amount (subject to the approved quotation).  \n  - If you drive the car yourself, you receive **₹12 per kilometre** for fuel plus the actual toll, parking, and interstate entry or road‑tax bills (two‑wheeler driving is discouraged).  \n- **Travel for you and dependents** – one‑way airfare or train fare for the employee and up to three dependents (spouse, up to two children, or dependent parents) as per the Travel Policy (maximum four people including the employee).  \n- **Relocation cost limits (by band)**  \n  - Band 1, 2 & 3A – up to **INR 100,000**  \n  - Band 3B & 3C – up to **INR 75,000**  \n  - Band 4 & 5 – up to **INR 50,000**  \n- **Recovery clause** – if you resign or separate within one year of your joining date, any reimbursed relocation expenses will be recovered in full from your final settlement.  \n- **Claim process** – obtain three quotes from movers/packers, submit the best‑quoted invoice, and provide all actual bills within **30 days** of the transfer. The recruiter’s approval is required for reimbursement.\n\n**Additional benefits for a new‑joiner (not listed for internal transfers)**  \n\n- **Hotel stay** – up to **14 days** for you and any declared dependents; extensions need HR‑Head approval.  \n- **Relocation leave** – within the first 6 months you are eligible for **5 paid leave days** under the special leave category.\n\n**Summary of key numbers and conditions**  \n\n- Covered items: household move, one car + one two‑wheeler, airfare/train for up to four people, fuel ₹12 /km + toll/parking/road‑taxes.  \n- Cost caps: **INR 100,000** (Band 1, 2 & 3A), **INR 75,000** (Band 3B & 3C), **INR 50,000** (Band 4 & 5).  \n- New‑joiner extras: **14 days** hotel stay, **5 paid** relocation leave days in the first 6 months.  \n- Recovery if separation occurs **within 1 year**.  ",
+      "citations": [
+        {
+          "label": "Source 1",
+          "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "start_page": 2,
+          "end_page": 2,
+          "chunk_id": "02d63876-f077-5bab-a2b6-98aafa2e56a9"
+        },
+        {
+          "label": "Source 2",
+          "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "start_page": 2,
+          "end_page": 2,
+          "chunk_id": "e8d509df-6d14-58c4-8a99-1bd311907c6f"
+        },
+        {
+          "label": "Source 3",
+          "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "start_page": 2,
+          "end_page": 2,
+          "chunk_id": "e56c23f9-efdb-5c9f-adc5-452bdfd41444"
+        },
+        {
+          "label": "Source 4",
+          "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "start_page": 1,
+          "end_page": 2,
+          "chunk_id": "2ae83085-1112-57f0-9370-2b819ae295a3"
+        },
+        {
+          "label": "Source 5",
+          "document_name": "1785918790_Internal_Relocation_policy.pdf",
+          "start_page": 2,
+          "end_page": 2,
+          "chunk_id": "476cdd88-562c-5e8b-8998-869ad5d7dbcf"
+        },
+        {
+          "label": "Source 6",
+          "document_name": "1785918790_Internal_Relocation_policy.pdf",
+          "start_page": 1,
+          "end_page": 2,
+          "chunk_id": "4b17b04a-be7e-50d7-b708-cc7e6af1e6ea"
+        },
+        {
+          "label": "Source 7",
+          "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "start_page": 2,
+          "end_page": 2,
+          "chunk_id": "680b8fdd-09d6-5daa-8aa5-506f361d7d0f"
+        },
+        {
+          "label": "Source 8",
+          "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "start_page": 2,
+          "end_page": 2,
+          "chunk_id": "1d85752c-3bf8-53ad-976f-f03da13f217b"
+        },
+        {
+          "label": "Source 9",
+          "document_name": "1785918790_Internal_Relocation_policy.pdf",
+          "start_page": 2,
+          "end_page": 2,
+          "chunk_id": "1e368d3e-45de-52ca-8fb9-68524da5f7ad"
+        },
+        {
+          "label": "Source 10",
+          "document_name": "1758534886_AMNEX_-_GHI_FY25-26_PPT (1).pdf",
+          "start_page": 20,
+          "end_page": 21,
+          "chunk_id": "8195a10b-6e6f-50f1-ba0c-7be9589c4eb8"
+        }
+      ],
+      "citation_count": 10,
+      "returned_conversation_id": "371507c4-6e9d-422c-93e1-af052fc99c33",
+      "llm_evaluation": {
+        "relevance_score": 10,
+        "groundedness_score": 9,
+        "completeness_score": 9,
+        "clarity_score": 9,
+        "overall_score": 9,
+        "hallucination_risk": "low",
+        "speed_assessment": "slow",
+        "strengths": "Provides a thorough, well‑structured answer that directly addresses both the general relocation coverage and the extra benefits for new joiners, with multiple citations supporting the details.",
+        "weaknesses": "The response took longer than optimal and is somewhat verbose, which could be trimmed for brevity.",
+        "summary": "A comprehensive, well‑cited answer that fully answers the query, but delivered slower than desired."
+      },
+      "llm_evaluation_time_seconds": 1.677,
+      "llm_evaluation_error": null,
+      "raw_response": {
+        "reply": "**What the company will reimburse for a relocation**\n\n- **Household move** – transportation of your household items from your current base location to the new work location.  \n- **Vehicle transport** – one car and one two‑wheeler:\n  - If you use a mover‑packer, you are reimbursed the actual invoice amount (subject to the approved quotation).  \n  - If you drive the car yourself, you receive **₹12 per kilometre** for fuel plus the actual toll, parking, and interstate entry or road‑tax bills (two‑wheeler driving is discouraged).  \n- **Travel for you and dependents** – one‑way airfare or train fare for the employee and up to three dependents (spouse, up to two children, or dependent parents) as per the Travel Policy (maximum four people including the employee).  \n- **Relocation cost limits (by band)**  \n  - Band 1, 2 & 3A – up to **INR 100,000**  \n  - Band 3B & 3C – up to **INR 75,000**  \n  - Band 4 & 5 – up to **INR 50,000**  \n- **Recovery clause** – if you resign or separate within one year of your joining date, any reimbursed relocation expenses will be recovered in full from your final settlement.  \n- **Claim process** – obtain three quotes from movers/packers, submit the best‑quoted invoice, and provide all actual bills within **30 days** of the transfer. The recruiter’s approval is required for reimbursement.\n\n**Additional benefits for a new‑joiner (not listed for internal transfers)**  \n\n- **Hotel stay** – up to **14 days** for you and any declared dependents; extensions need HR‑Head approval.  \n- **Relocation leave** – within the first 6 months you are eligible for **5 paid leave days** under the special leave category.\n\n**Summary of key numbers and conditions**  \n\n- Covered items: household move, one car + one two‑wheeler, airfare/train for up to four people, fuel ₹12 /km + toll/parking/road‑taxes.  \n- Cost caps: **INR 100,000** (Band 1, 2 & 3A), **INR 75,000** (Band 3B & 3C), **INR 50,000** (Band 4 & 5).  \n- New‑joiner extras: **14 days** hotel stay, **5 paid** relocation leave days in the first 6 months.  \n- Recovery if separation occurs **within 1 year**.  ",
+        "conversation_id": "371507c4-6e9d-422c-93e1-af052fc99c33",
+        "citations": [
+          {
+            "label": "Source 1",
+            "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+            "start_page": 2,
+            "end_page": 2,
+            "chunk_id": "02d63876-f077-5bab-a2b6-98aafa2e56a9"
+          },
+          {
+            "label": "Source 2",
+            "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+            "start_page": 2,
+            "end_page": 2,
+            "chunk_id": "e8d509df-6d14-58c4-8a99-1bd311907c6f"
+          },
+          {
+            "label": "Source 3",
+            "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+            "start_page": 2,
+            "end_page": 2,
+            "chunk_id": "e56c23f9-efdb-5c9f-adc5-452bdfd41444"
+          },
+          {
+            "label": "Source 4",
+            "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+            "start_page": 1,
+            "end_page": 2,
+            "chunk_id": "2ae83085-1112-57f0-9370-2b819ae295a3"
+          },
+          {
+            "label": "Source 5",
+            "document_name": "1785918790_Internal_Relocation_policy.pdf",
+            "start_page": 2,
+            "end_page": 2,
+            "chunk_id": "476cdd88-562c-5e8b-8998-869ad5d7dbcf"
+          },
+          {
+            "label": "Source 6",
+            "document_name": "1785918790_Internal_Relocation_policy.pdf",
+            "start_page": 1,
+            "end_page": 2,
+            "chunk_id": "4b17b04a-be7e-50d7-b708-cc7e6af1e6ea"
+          },
+          {
+            "label": "Source 7",
+            "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+            "start_page": 2,
+            "end_page": 2,
+            "chunk_id": "680b8fdd-09d6-5daa-8aa5-506f361d7d0f"
+          },
+          {
+            "label": "Source 8",
+            "document_name": "1785918864_Relocation_policy_for_new_joiners.pdf",
+            "start_page": 2,
+            "end_page": 2,
+            "chunk_id": "1d85752c-3bf8-53ad-976f-f03da13f217b"
+          },
+          {
+            "label": "Source 9",
+            "document_name": "1785918790_Internal_Relocation_policy.pdf",
+            "start_page": 2,
+            "end_page": 2,
+            "chunk_id": "1e368d3e-45de-52ca-8fb9-68524da5f7ad"
+          },
+          {
+            "label": "Source 10",
+            "document_name": "1758534886_AMNEX_-_GHI_FY25-26_PPT (1).pdf",
+            "start_page": 20,
+            "end_page": 21,
+            "chunk_id": "8195a10b-6e6f-50f1-ba0c-7be9589c4eb8"
+          }
+        ],
+        "rewritten_query": "What relocation expenses does the company cover, and is the coverage different for a new joiner?",
+        "english_query": null,
+        "retrieved_chunk_count": 10,
+        "verified": true,
+        "verification_reason": "",
+        "answer_source": "rag"
+      },
+      "answer_source": "rag",
+      "retrieved_chunk_count": 10,
+      "precision_recall_at_10": {
+        "k": 10,
+        "match_field": "document_name",
+        "ground_truth": [
+          "1785918790_Internal_Relocation_policy.pdf",
+          "1785918864_Relocation_policy_for_new_joiners.pdf"
+        ],
+        "retrieved_at_k": [
+          "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "1785918790_Internal_Relocation_policy.pdf",
+          "1785918790_Internal_Relocation_policy.pdf",
+          "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "1785918864_Relocation_policy_for_new_joiners.pdf",
+          "1785918790_Internal_Relocation_policy.pdf",
+          "1758534886_AMNEX_-_GHI_FY25-26_PPT (1).pdf"
+        ],
+        "hits": 9,
+        "precision_at_10": 0.9,
+        "recall_at_10": 1.0
+      },
+      "robustness_check": {
+        "expected_type": "covered",
+        "checked": true,
+        "passed": true,
+        "detail": "grounded, cited answer as expected",
+        "check_basis": "answer_source (rag)"
+      },
+      "rerank_variants": [
+        {
+          "variant_name": "no_rerank__hybrid_0.5",
+          "reranking_method": "Hybrid search (alpha=0.5), no reranking",
+          "config": {
+            "rerank": false,
+            "alpha": 0.5,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.017,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        },
+        {
+          "variant_name": "rerank__hybrid_0.5",
+          "reranking_method": "Hybrid search (alpha=0.5) + BGE-Reranker-v2-M3",
+          "config": {
+            "rerank": true,
+            "alpha": 0.5,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.011,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        },
+        {
+          "variant_name": "rerank__vector_only_1.0",
+          "reranking_method": "Vector-only search + BGE-Reranker-v2-M3",
+          "config": {
+            "rerank": true,
+            "alpha": 1.0,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.013,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        },
+        {
+          "variant_name": "rerank__bm25_only_0.0",
+          "reranking_method": "BM25-only search + BGE-Reranker-v2-M3",
+          "config": {
+            "rerank": true,
+            "alpha": 0.0,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.012,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        }
+      ],
+      "best_variant": {
+        "name": "chat_pipeline (/api/v1/chat)",
+        "overall_score": 9
+      }
+    },
+    {
+      "question_id": 18,
+      "question": "travel policy me daily allowance kitna milta hai?",
+      "conversation_id_used": null,
+      "status": "SUCCESS",
+      "http_status": 200,
+      "response_time_seconds": 9.9,
+      "started_at": "2026-09-02T10:56:15.843429+00:00",
+      "finished_at": "2026-09-02T10:56:25.744616+00:00",
+      "error": null,
+      "answer": "_Our documents mention this, but I couldn't confirm the details well enough to quote them as policy — here's what I can tell you generally instead._\n\n**Daily allowance (per diem) typically ranges from ₹1,500 to ₹3,500 per day for domestic travel in India, and from $100 to $200 per day for international travel (U.S. GSA rates).**  \n\n- **Why it varies**\n  - **Location:** Tier‑1 cities (Mumbai, Delhi, Bangalore) often have a higher rate than smaller towns.\n  - **Country:** International per‑diems follow the U.S. General Services Administration (GSA) schedule or the destination country's standard rates.\n  - **Job level / purpose:** Senior staff or training trips may get a higher allowance than junior staff on routine site visits.\n\n- **What the allowance covers**\n  - Meals and incidentals (food, tips, small transport).\n  - Sometimes a modest portion of lodging if the company does not book a hotel directly.\n\n- **Common pitfalls**\n  - **Exceeding the limit:** Any expense above the per‑diem must be backed by receipts and may be reimbursed only if pre‑approved.\n  - **Partial days:** Many policies grant a full day’s rate for travel days over a certain number of hours (e.g., > 5 hours), otherwise a half‑day rate.\n  - **Currency conversion:** For overseas trips, the allowance is often fixed in USD and converted at the travel date’s exchange rate; fluctuations can affect the actual amount you receive.\n\n- **Typical process**\n  1. Check the travel request form for the default per‑diem based on destination.\n  2. If you need a higher rate (e.g., for a high‑cost city), request an exception before travel.\n  3. Submit the expense report; the per‑diem is applied automatically, and you only need to attach receipts for non‑per‑diem items (e.g., taxi, internet).\n\nIf you need the exact figure for a specific city or country, let me know the destination and I can point you to the most recent public rate tables.",
+      "citations": [],
+      "citation_count": 0,
+      "returned_conversation_id": "96f60d4a-31aa-419f-8dbc-6ded6eabd098",
+      "llm_evaluation": {
+        "relevance_score": 7,
+        "groundedness_score": 2,
+        "completeness_score": 4,
+        "clarity_score": 8,
+        "overall_score": 5,
+        "hallucination_risk": "medium",
+        "speed_assessment": "slow",
+        "strengths": "The answer is clearly written, well‑structured, and addresses the general concept of daily allowances.",
+        "weaknesses": "It provides no citations, gives only generic figures that may not match the specific policy, and therefore lacks grounding and completeness.",
+        "summary": "The response is clear but generic and unsupported, resulting in low groundedness and incomplete coverage of the specific travel policy."
+      },
+      "llm_evaluation_time_seconds": 1.416,
+      "llm_evaluation_error": null,
+      "raw_response": {
+        "reply": "_Our documents mention this, but I couldn't confirm the details well enough to quote them as policy — here's what I can tell you generally instead._\n\n**Daily allowance (per diem) typically ranges from ₹1,500 to ₹3,500 per day for domestic travel in India, and from $100 to $200 per day for international travel (U.S. GSA rates).**  \n\n- **Why it varies**\n  - **Location:** Tier‑1 cities (Mumbai, Delhi, Bangalore) often have a higher rate than smaller towns.\n  - **Country:** International per‑diems follow the U.S. General Services Administration (GSA) schedule or the destination country's standard rates.\n  - **Job level / purpose:** Senior staff or training trips may get a higher allowance than junior staff on routine site visits.\n\n- **What the allowance covers**\n  - Meals and incidentals (food, tips, small transport).\n  - Sometimes a modest portion of lodging if the company does not book a hotel directly.\n\n- **Common pitfalls**\n  - **Exceeding the limit:** Any expense above the per‑diem must be backed by receipts and may be reimbursed only if pre‑approved.\n  - **Partial days:** Many policies grant a full day’s rate for travel days over a certain number of hours (e.g., > 5 hours), otherwise a half‑day rate.\n  - **Currency conversion:** For overseas trips, the allowance is often fixed in USD and converted at the travel date’s exchange rate; fluctuations can affect the actual amount you receive.\n\n- **Typical process**\n  1. Check the travel request form for the default per‑diem based on destination.\n  2. If you need a higher rate (e.g., for a high‑cost city), request an exception before travel.\n  3. Submit the expense report; the per‑diem is applied automatically, and you only need to attach receipts for non‑per‑diem items (e.g., taxi, internet).\n\nIf you need the exact figure for a specific city or country, let me know the destination and I can point you to the most recent public rate tables.",
+        "conversation_id": "96f60d4a-31aa-419f-8dbc-6ded6eabd098",
+        "citations": [],
+        "rewritten_query": "travel policy में daily allowance कितना मिलता है?",
+        "english_query": "What is the daily allowance provided under the travel policy?",
+        "retrieved_chunk_count": 10,
+        "verified": false,
+        "verification_reason": "The answer falsely claims the documents mention only lodging limits and meal‑reimbursement principles, while the provided context also includes travel‑desk rules, accommodation limits, travel modes, and other policy details.",
+        "answer_source": "unverified_fallback"
+      },
+      "answer_source": "unverified_fallback",
+      "retrieved_chunk_count": 10,
+      "precision_recall_at_10": {
+        "k": 10,
+        "match_field": "document_name",
+        "ground_truth": [
+          "1714554179_Domestic Travel Policy Version 2.0.pdf"
+        ],
+        "retrieved_at_k": [],
+        "hits": 0,
+        "precision_at_10": 0.0,
+        "recall_at_10": 0.0
+      },
+      "robustness_check": {
+        "expected_type": "covered",
+        "checked": true,
+        "passed": false,
+        "detail": "expected a grounded answer with real citations — did not get it",
+        "check_basis": "answer_source (unverified_fallback)"
+      },
+      "rerank_variants": [
+        {
+          "variant_name": "no_rerank__hybrid_0.5",
+          "reranking_method": "Hybrid search (alpha=0.5), no reranking",
+          "config": {
+            "rerank": false,
+            "alpha": 0.5,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.013,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        },
+        {
+          "variant_name": "rerank__hybrid_0.5",
+          "reranking_method": "Hybrid search (alpha=0.5) + BGE-Reranker-v2-M3",
+          "config": {
+            "rerank": true,
+            "alpha": 0.5,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.014,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        },
+        {
+          "variant_name": "rerank__vector_only_1.0",
+          "reranking_method": "Vector-only search + BGE-Reranker-v2-M3",
+          "config": {
+            "rerank": true,
+            "alpha": 1.0,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.013,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        },
+        {
+          "variant_name": "rerank__bm25_only_0.0",
+          "reranking_method": "BM25-only search + BGE-Reranker-v2-M3",
+          "config": {
+            "rerank": true,
+            "alpha": 0.0,
+            "limit": 30,
+            "top_k": 10
+          },
+          "status": "ERROR",
+          "http_status": 404,
+          "response_time_seconds": 0.011,
+          "error": "Non-200 response: {\"detail\":\"Not Found\"}",
+          "answer": null,
+          "citations": [],
+          "citation_count": 0,
+          "was_answerable": null,
+          "llm_evaluation": null,
+          "llm_evaluation_time_seconds": null,
+          "llm_evaluation_error": null,
+          "precision_recall_at_10": null,
+          "raw_response": null
+        }
+      ],
+      "best_variant": {
+        "name": "chat_pipeline (/api/v1/chat)",
+        "overall_score": 5
+      }
+    }
+  ]
+}

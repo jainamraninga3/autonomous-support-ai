@@ -1,32 +1,39 @@
-"""LangGraph RAG workflow — plan.md's "Final V1 Pipeline", extended with
-a disclosed general-knowledge fallback, and scoped to refuse anything
-that isn't company-related:
+"""LangGraph RAG workflow — plan.md's "Final V1 Pipeline", extended so
+the user always gets a real answer:
 
-START -> classify -> GENERAL -> refuse (out of scope) -> END
-                   -> SMALL_TALK -> short conversational reply -> END
-                   -> RAG_REQUIRED -> rewrite -> retrieve -> generate -> [was_answerable?]
-                                                                 -> yes -> verify -> END
-                                                                 -> no  -> general_fallback -> END
+START -> classify -> SMALL_TALK    -> conversational reply         -> END
+                  -> GENERAL       -> general-knowledge answer      -> END
+                  -> RAG_REQUIRED  -> rewrite -> retrieve -> generate
+                                       -> answerable? -> verify
+                                                          -> supported   -> END
+                                                          -> unsupported -> general answer -> END
+                                       -> not answerable ------------------> general answer -> END
 
-Two DIFFERENT things both involve "general knowledge," on purpose — do
-not conflate them:
-- `general` (classify said GENERAL — e.g. "what is 2+2", "write me a
-  Python function", any topic unrelated to the company) — this bot is
-  scoped to company policies/documents ONLY, so these are refused
-  outright with a fixed message. No LLM call happens here at all: not
-  just "the answer is off-topic" but a deliberate security boundary —
-  the raw user message is never handed to an LLM asking it to freely
-  answer anything, which is exactly the kind of open surface a user
-  could otherwise abuse (jailbreak attempts, "ignore previous
-  instructions", unrelated homework help, etc.).
-- `general_fallback` (classify said RAG_REQUIRED — i.e. plausibly a
-  company question — but retrieval/generation then found nothing
-  relevant in our documents) — THIS is where a general-knowledge LLM
-  call still happens, but only for a question already judged
-  company-relevant, and the reply always discloses it isn't sourced
-  from our documents. This is not a backdoor around the refusal above:
-  `classify` already sent unrelated questions to `general` before
-  retrieval was ever attempted.
+**The GENERAL branch declines without calling the LLM, on purpose.**
+Maths, coding, homework, trivia — none of it reaches the model. Two
+reasons, and they are both about it being a COMPANY tool: staff would
+otherwise run personal work through the company's API budget, and every
+message would become a prompt-injection surface. A prompt telling the
+model to behave can be argued with by the message; not making the call
+cannot. This boundary was briefly removed during development and
+restored deliberately.
+
+A question about the ASSISTANT ("who are you?") is not off-topic — that
+is SMALL_TALK, and it is answered.
+
+Two routes still end in a general-knowledge answer. Both are for
+questions already judged company-related, so they are not a way around
+the boundary above:
+- `general_fallback` — a company question the documents didn't cover.
+- `unverified_fallback` — the documents produced an answer, but
+  verification couldn't confirm it was supported, so it was discarded
+  and answered generally instead. Previously this path returned only "I
+  could not verify this", which left the user with nothing.
+
+Both use the deliberately restrained prompt in
+`app/rag/generation/general_answer.py`: a long generic essay about "what
+companies typically do" is indistinguishable from real policy to the
+reader, and was measured as a high hallucination risk.
 
 This is the first real graph for this project — earlier versions of this
 module were a single placeholder echo node, kept only to prove LangGraph
@@ -49,6 +56,7 @@ from app.rag.classification import QueryClassification, classify_query
 from app.rag.embeddings import EmbeddingModelUnavailableError, get_embedder
 from app.rag.generation.answer_generator import generate_answer
 from app.rag.generation.context_builder import build_context
+from app.rag.generation.general_answer import generate_general_answer
 from app.rag.generation.small_talk import generate_small_talk_reply
 from app.rag.generation.verification import verify_answer
 from app.rag.query_rewriting import rewrite_query
@@ -60,38 +68,32 @@ from app.rag.retrieval.rerank import rerank_chunks
 
 logger = get_logger(__name__)
 
-_UNSUPPORTED_ANSWER = (
-    "I found some information but could not fully verify that this answer is "
-    "supported by it, so I'd rather not risk giving you an unverified answer."
+# Shown above an answer that did NOT come from the company's documents,
+# so a reader can never mistake general knowledge for policy. Kept short
+# and plain — the earlier wording read like an apology and buried the
+# answer under it.
+_NOT_IN_DOCUMENTS_NOTE = (
+    "_Not found in our documents — answering from general knowledge, "
+    "so please confirm anything policy-specific with HR._\n\n"
 )
 
-_GENERAL_FALLBACK_PREFIX = (
-    "This question isn't covered by our available documents, so here is a "
-    "general-knowledge answer instead (not verified against our internal policies):\n\n"
+_UNVERIFIED_NOTE = (
+    "_Our documents mention this, but I couldn't confirm the details well enough to "
+    "quote them as policy — here's what I can tell you generally instead._\n\n"
 )
 
-_GENERAL_FALLBACK_INSTRUCTION = (
-    "The user asked the question below. It is NOT covered by our company documents, "
-    "so you are answering from general knowledge instead — the user has already been "
-    "told this answer is not verified against our internal policies, so do not repeat "
-    "that disclaimer yourself. Give your best direct, helpful, general-knowledge answer "
-    "right away. Do not ask clarifying questions and do not refuse — attempt a genuinely "
-    "useful answer even if the question is brief, informal, or has typos; make reasonable "
-    "assumptions about what's being asked rather than asking the user to clarify. Respond in "
-    "the SAME language the question below is written in (Hindi, Gujarati, Marathi, or any "
-    "other language) — do not switch to English or any other language.\n\n"
-    "Format the reply as plain Markdown and never emit HTML — no <br>, no <b>. A renderer "
-    "that refuses raw HTML shows those tags literally to the user. Use '-' for bullets, "
-    "prefer short paragraphs and lists over tables, and skip horizontal rules.\n\n"
-    "Question: {query}"
-)
-
+# Sent for anything classified GENERAL. Deliberately fixed text: no LLM
+# call happens on this path at all, so there is nothing for a crafted
+# message to influence and no API cost to a misuse attempt. Worded to
+# explain the scope and redirect rather than just say no — the earlier
+# version ("I can't help with unrelated topics like general knowledge,
+# math, or coding questions") read as a rebuke.
 _OUT_OF_SCOPE_ANSWER = (
-    "I'm a support assistant for our company's policies and documents — I can only help "
-    "with questions related to that. I can't help with unrelated topics like general "
-    "knowledge, math, or coding questions."
+    "I'm the assistant for our company's policies and documents — things like leave, travel, "
+    "reimbursements, IT rules, conduct, and joining or exit processes. I'm not set up to work "
+    "through maths, coding, or general questions, so I'd only guess at those.\n\n"
+    "Ask me anything about how things work here and I'll find it in the documents for you."
 )
-
 
 def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
     """Compile the full classify -> (general | RAG) -> verify workflow.
@@ -103,20 +105,32 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
     """
 
     async def classify_node(state: GraphState) -> dict:
-        classification = await classify_query(state["original_query"], llm_client)
+        classification = await classify_query(
+            state["original_query"], llm_client, history=state["history"]
+        )
+        logger.info(
+            "Classified as %s: %r%s",
+            classification.value,
+            state["original_query"],
+            f" (with {len(state['history'])} turns of history)" if state["history"] else "",
+        )
         return {"classification": classification.value}
 
     async def general_node(state: GraphState) -> dict:
-        # Deliberately does NOT call the LLM with the raw user message —
-        # see the module docstring. A classified-GENERAL query is, by
-        # definition, unrelated to the company's documents; answering it
-        # anyway would make this bot an open general-purpose assistant.
+        # NO LLM CALL. See the module docstring: this is the misuse and
+        # injection boundary, and it only holds because the message never
+        # reaches the model.
+        #
+        # Logged at INFO so out-of-scope traffic is visible — if staff are
+        # routinely asking this thing to do their coding, that is worth
+        # knowing rather than silently declining forever.
+        logger.info("Declined out-of-scope question: %r", state["original_query"])
         return {
             "response": _OUT_OF_SCOPE_ANSWER,
             "answer": _OUT_OF_SCOPE_ANSWER,
             "citations": [],
             "verified": None,
-            "answer_source": "off_topic_refusal",
+            "answer_source": "off_topic",
         }
 
     async def small_talk_node(state: GraphState) -> dict:
@@ -137,7 +151,7 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         # — the English translation costs no extra wall-clock, it just
         # rides along beside the rewrite it would otherwise wait for.
         rewritten, english = await asyncio.gather(
-            rewrite_query(state["original_query"], llm_client),
+            rewrite_query(state["original_query"], llm_client, history=state["history"]),
             translate_query_to_english(state["original_query"], llm_client),
         )
         logger.info("Query rewrite: %r -> %r", state["original_query"], rewritten)
@@ -146,14 +160,34 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         return {"rewritten_query": rewritten, "english_query": english}
 
     async def retrieve_node(state: GraphState) -> dict:
-        if weaviate_client is None or not weaviate_client.collections.exists(CHUNK_COLLECTION_NAME):
+        if weaviate_client is None:
+            logger.warning("Weaviate is not available — answering without any document context")
+            return {"chunks": []}
+        if not weaviate_client.collections.exists(CHUNK_COLLECTION_NAME):
+            # Distinguished from "found nothing" on purpose: this is
+            # almost always "no documents have been ingested yet", and
+            # silently degrading to the general-knowledge fallback makes
+            # that look like a retrieval quality problem instead.
+            logger.warning(
+                "Weaviate collection %r does not exist — no documents have been ingested yet",
+                CHUNK_COLLECTION_NAME,
+            )
             return {"chunks": []}
 
         collection = weaviate_client.collections.get(CHUNK_COLLECTION_NAME)
         query = state["rewritten_query"] or state["original_query"]
+        settings = get_settings()
+
+        # Per-request overrides fall back to the configured defaults, so
+        # omitting them behaves exactly as it did before they existed.
+        limit = state["limit"] if state["limit"] is not None else 30
+        alpha = state["alpha"] if state["alpha"] is not None else 0.5
+        top_k = state["top_k"] if state["top_k"] is not None else settings.RERANK_TOP_K
+        do_rerank = state["rerank"] if state["rerank"] is not None else settings.RERANK_ENABLED
+
         try:
             embed_query_fn = get_embedder().embed_query
-            candidates = hybrid_search(collection, query, embed_query_fn)
+            candidates = hybrid_search(collection, query, embed_query_fn, limit=limit, alpha=alpha)
 
             # Second pass in English, merged by rank. A non-English query
             # embeds into the same BGE-M3 space as the English documents,
@@ -162,19 +196,20 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
             # measurement that motivated this.
             english_query = state["english_query"]
             if english_query:
-                english_candidates = hybrid_search(collection, english_query, embed_query_fn)
+                english_candidates = hybrid_search(
+                    collection, english_query, embed_query_fn, limit=limit, alpha=alpha
+                )
                 candidates = merge_by_rank(candidates, english_candidates, limit=len(candidates))
 
-            settings = get_settings()
-            if settings.RERANK_ENABLED:
-                reranked = rerank_chunks(query, candidates, get_reranker().score)
+            if do_rerank:
+                reranked = rerank_chunks(query, candidates, get_reranker().score, top_k=top_k)
                 chunks = [r.chunk for r in reranked]
             else:
                 # Stage 1 already returns highest-score-first, so taking
                 # the head is the same selection reranking would make,
                 # minus the cross-encoder pass. See RERANK_ENABLED in
                 # app/core/config.py for why this is the default.
-                chunks = candidates[: settings.RERANK_TOP_K]
+                chunks = candidates[:top_k]
         except EmbeddingModelUnavailableError:
             logger.exception("Embedding/reranking unavailable during graph retrieval")
             chunks = []
@@ -185,31 +220,47 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         return {"answer": result.answer, "citations": result.citations, "was_answerable": result.was_answerable}
 
     async def general_fallback_node(state: GraphState) -> dict:
-        # Retrieval/generation found nothing relevant for a question
-        # `classify` already judged RAG_REQUIRED — answer from the LLM's
-        # own general knowledge rather than just refusing, but disclose
-        # that plainly so the user knows it isn't grounded in our
-        # documents. Citations stay empty: nothing here is sourced.
-        general_answer = await llm_client.generate_reply(
-            _GENERAL_FALLBACK_INSTRUCTION.format(query=state["original_query"])
-        )
-        response = _GENERAL_FALLBACK_PREFIX + general_answer
+        # A question `classify` judged company-related, but the documents
+        # had nothing for it (or the answer failed verification). Answer
+        # from general knowledge, with a note so it can't be mistaken for
+        # policy. Citations stay empty: nothing here is sourced.
+        #
+        # `verified is False` distinguishes the two ways in — the answer
+        # existed but couldn't be confirmed, versus never existing.
+        failed_verification = state.get("verified") is False
+        # Both ways into this node are company questions — that's what
+        # `classify` decided before retrieval ran — so the restrained
+        # prompt applies to both.
+        answer = await generate_general_answer(state["original_query"], llm_client)
+        note = _UNVERIFIED_NOTE if failed_verification else _NOT_IN_DOCUMENTS_NOTE
+        response = note + answer
         return {
             "response": response,
             "answer": response,
             "citations": [],
-            "verified": None,
-            "answer_source": "general_fallback",
+            "answer_source": "unverified_fallback" if failed_verification else "general_fallback",
         }
 
     async def verify_node(state: GraphState) -> dict:
         context = build_context(state["chunks"])
         verification = await verify_answer(state["answer"], context, llm_client)
-        response = state["answer"] if verification.supported else _UNSUPPORTED_ANSWER
+
+        # On failure this used to return a fixed "I could not verify this"
+        # and stop, leaving the user with nothing actionable. Now it
+        # records the verdict and routes on to a general-knowledge answer
+        # — the ungrounded answer is still discarded (that part was
+        # right), but the user gets something useful instead of a wall.
+        if not verification.supported:
+            return {
+                "verified": False,
+                "verification_reason": verification.reasoning,
+                "citations": [],
+            }
+
         return {
-            "verified": verification.supported,
+            "verified": True,
             "verification_reason": verification.reasoning,
-            "response": response,
+            "response": state["answer"],
             "answer_source": "rag",
         }
 
@@ -222,6 +273,11 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
 
     def _route_after_generate(state: GraphState) -> str:
         return "verify" if state["was_answerable"] else "general_fallback"
+
+    def _route_after_verify(state: GraphState) -> str:
+        # A verified answer is done. An unverified one falls through to a
+        # general-knowledge answer rather than dead-ending.
+        return END if state["verified"] else "general_fallback"
 
     graph = StateGraph(GraphState)
     graph.add_node("classify", classify_node)
@@ -247,6 +303,8 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         "generate", _route_after_generate, {"verify": "verify", "general_fallback": "general_fallback"}
     )
     graph.add_edge("general_fallback", END)
-    graph.add_edge("verify", END)
+    graph.add_conditional_edges(
+        "verify", _route_after_verify, {END: END, "general_fallback": "general_fallback"}
+    )
 
     return graph.compile()

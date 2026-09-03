@@ -164,12 +164,17 @@ def check_robustness(question_entry, answer_text, citations, answer_source=None)
     they should. Skipped (checked=False) if `expected_type` is absent —
     never grades a question nobody labeled.
 
-    Prefers the backend's own `answer_source` field ('off_topic_refusal' /
-    'rag' / 'general_fallback', added to /api/v1/chat's response) when
-    present — an explicit, structured signal rather than string-matching
-    the reply text. Falls back to matching the two fixed marker strings
-    (OUT_OF_SCOPE_MARKER / GENERAL_FALLBACK_MARKER) only if answer_source
-    is missing, e.g. against an older backend that predates that field.
+    Prefers the backend's own `answer_source` field over string-matching
+    the reply text. Current values: 'rag', 'off_topic', 'general_fallback',
+    'unverified_fallback', 'small_talk'.
+
+    `expected_type: "off_topic"` expects 'off_topic' — the fixed
+    out-of-scope decline, sent without any LLM call.
+
+    `expected_type: "uncovered"` accepts either fallback source:
+    'general_fallback' (the documents didn't cover it) or
+    'unverified_fallback' (they did, but the answer failed verification).
+    Which one it was is reported per question; it doesn't change pass/fail.
     """
     expected = question_entry.get("expected_type")
     if not expected:
@@ -183,11 +188,16 @@ def check_robustness(question_entry, answer_text, citations, answer_source=None)
     answer_text = answer_text or ""
     has_citations = bool(citations)
 
+    # Both fallback paths answer a COMPANY question without the
+    # documents. Grouped for pass/fail; the exact value is still reported
+    # per question.
+    fallback_sources = {"general_fallback", "unverified_fallback"}
+
     if answer_source is not None:
-        is_off_topic = answer_source == "off_topic_refusal"
-        is_fallback = answer_source == "general_fallback"
+        is_off_topic = answer_source == "off_topic"
+        is_fallback = answer_source in fallback_sources
         is_rag = answer_source == "rag"
-        check_basis = "answer_source"
+        check_basis = f"answer_source ({answer_source})"
     else:
         is_off_topic = config.OUT_OF_SCOPE_MARKER in answer_text
         is_fallback = config.GENERAL_FALLBACK_MARKER in answer_text
@@ -196,13 +206,13 @@ def check_robustness(question_entry, answer_text, citations, answer_source=None)
 
     if expected == "off_topic":
         passed = is_off_topic and not has_citations
-        detail = "off-topic refusal fired correctly" if passed else (
-            "expected the fixed out-of-scope refusal with no citations — did not get it"
+        detail = "out-of-scope decline fired correctly, no citations" if passed else (
+            "expected the fixed out-of-scope decline with no citations — did not get it"
         )
     elif expected == "uncovered":
         passed = is_fallback and not has_citations
-        detail = "disclosed general-knowledge fallback fired correctly" if passed else (
-            "expected the disclosed general-knowledge fallback with no citations — did not get it"
+        detail = f"answered outside the documents ({answer_source or 'marker match'}), no citations" if passed else (
+            "expected a general-knowledge answer with no citations — did not get it"
         )
     elif expected == "covered":
         passed = has_citations and is_rag

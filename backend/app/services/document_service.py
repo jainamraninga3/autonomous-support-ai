@@ -73,7 +73,51 @@ class DocumentService:
             written = await embed_document(self.session_factory, document_id, doc_version.version, self.weaviate_client)
         except FileNotFoundError as exc:
             raise NotFoundError(str(exc)) from exc
+
+        self._drop_other_versions_from_weaviate(document_id, doc_version.version)
         return doc_version.version, written, False
+
+    def _drop_other_versions_from_weaviate(self, document_id: UUID, keep_version: int) -> None:
+        """Delete this document's chunks from every version EXCEPT `keep_version`.
+
+        Chunk objects are keyed by a UUID derived from
+        (document_id, version, chunk_index) — see
+        `app/rag/ingestion/vector_writer.py`. So re-processing a document
+        writes a NEW set of objects rather than replacing the old ones,
+        and nothing was cleaning the old ones up. Retrieval does not
+        filter by version, so those stale chunks kept competing with the
+        current text in every search, and the collection grew on every
+        re-process. Both a correctness and a performance problem.
+
+        Failures here are logged, not raised: the embedding itself
+        succeeded, so failing the request would misreport what happened.
+        The consequence of a failed prune is stale chunks, which is what
+        the situation already was.
+        """
+        if self.weaviate_client is None:
+            return
+        if not self.weaviate_client.collections.exists(CHUNK_COLLECTION_NAME):
+            return
+
+        try:
+            collection = self.weaviate_client.collections.get(CHUNK_COLLECTION_NAME)
+            result = collection.data.delete_many(
+                where=Filter.by_property("document_id").equal(str(document_id))
+                & Filter.by_property("version").not_equal(keep_version)
+            )
+            removed = getattr(result, "successful", None)
+            if removed:
+                logger.info(
+                    "Pruned %s stale chunk(s) from earlier versions of document_id=%s",
+                    removed,
+                    document_id,
+                )
+        except Exception:  # noqa: BLE001 - never fail a successful embed over cleanup
+            logger.exception(
+                "Failed to prune earlier versions' chunks for document_id=%s — stale chunks "
+                "may still be returned by retrieval",
+                document_id,
+            )
 
     async def list_documents(self) -> list:
         return await self.repository.list_all()

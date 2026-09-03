@@ -127,8 +127,12 @@ CHAIN_CONVERSATIONS = False
 # `expected_type` is optional per question — omit it to skip this check
 # for a question you're not confident how to grade (e.g. genuinely
 # ambiguous or edge-case questions).
-OUT_OF_SCOPE_MARKER = "I'm a support assistant for our company's policies and documents"
-GENERAL_FALLBACK_MARKER = "This question isn't covered by our available documents"
+# Only used as a FALLBACK when a response has no `answer_source` field
+# (an older backend). Current backends always send it, so these are
+# effectively dead — kept so the harness still works against one.
+#
+OUT_OF_SCOPE_MARKER = "I'm the assistant for our company's policies and documents"
+GENERAL_FALLBACK_MARKER = "Not found in our documents"
 
 # --- Quick retest filter ---
 # Set to a list of question `id`s from questions.json to run ONLY those

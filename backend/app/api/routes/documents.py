@@ -1,10 +1,15 @@
 """Document upload / ingest / list / get / delete routes.
 
-Upload only extracts + chunks + writes to Postgres (no embedding) and
-returns a `document_id`; that id is then passed to `ingest` to embed the
-document's chunks into Weaviate. Kept as two calls rather than one so a
-caller can upload many documents cheaply and choose when to pay for the
-(slower) embedding step.
+`POST /upload` only extracts + chunks + writes to Postgres (no
+embedding) and returns a `document_id`; that id is then passed to
+`ingest` to embed the document's chunks into Weaviate. Kept as two calls
+so a caller can upload many documents cheaply and choose when to pay for
+the (slower) embedding step.
+
+Uploads are one file per call. A batch endpoint that did both for many
+files at once existed briefly and was removed — it made the request take
+minutes with no progress until it finished, which is worse than N quick
+calls you can watch.
 """
 
 from uuid import UUID

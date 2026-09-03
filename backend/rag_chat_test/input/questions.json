@@ -1,35 +1,24 @@
 {
-  "_comment": "Multilingual HARD case: the compound SL-vs-EL comparison (the question that took three runs to pass in English), now asked in Hindi and Kannada too. Four dimensions x two leave types = eight facts that must be gathered across chunks AND translated. Check the numbers survive intact: SL 7 days / accumulation capped at 15 / no encashment / medical certificate at 3+ consecutive days; EL 21 days / credited monthly / balance above 30 encashed each January. Also check the EL medical line is phrased as 'the policy does not state' rather than 'not required' -- that exact phrasing is what the verifier rejected in run 3, and translation is a fresh chance to lose it.",
+  "_comment": "Only the questions that actually failed the 20-question run of 2026-09-02 (avg 8.5/10, 18/20 robustness). id 14 was the one genuine failure: the generator claimed the internal-relocation policy shares the new-joiner policy's three-quote / recruiter-approval / 30-day-bill rules, the verifier correctly rejected it, and the fallback then wrote ~700 words of 'typical relocation coverage' that reads like policy (judged HIGH hallucination risk). Re-checking the restrained company-fallback prompt: expect a few sentences pointing at HR, no invented limits or approval steps. id 18 scored 5/10 but the bot was RIGHT and the judge was wrong — there is no per-diem in the travel policy, only per-day accommodation limits (INR 7500/11000 by band, 1000 own arrangement) and meal reimbursement. Its flat 'not available' was still unhelpful, so re-checking the new rule that says: when the exact figure asked for is absent but closely related figures are present, give those and name the difference. Note ids 14 and 18 keep their original numbering from the 20-question set so results stay comparable across runs.",
   "_field_notes": "Optional per-question fields, added for the precision@10/recall@10 and robustness checks: 'expected_type' is one of 'off_topic' (should get the fixed out-of-scope refusal), 'uncovered' (should get the disclosed general-knowledge fallback), or 'covered' (should get a real grounded, cited answer) — omitted where genuinely ambiguous so the harness skips grading those rather than guessing. 'relevant_document_names' is document-level ground truth for precision/recall — only set where the content is confidently expected to come from that document.",
   "questions": [
     {
-      "id": 1,
-      "_language": "en",
-      "question": "Compare sick leave and earned leave in terms of annual entitlement, carry-forward, encashment, and medical requirements.",
+      "id": 14,
+      "question": "I am relocating for work. What does the company cover, and is it different for a new joiner?",
       "conversation_id": null,
       "expected_type": "covered",
       "relevant_document_names": [
-        "Leave_Policy_1.pdf"
+        "1785918790_Internal_Relocation_policy.pdf",
+        "1785918864_Relocation_policy_for_new_joiners.pdf"
       ]
     },
     {
-      "id": 2,
-      "_language": "hi",
-      "question": "सिक लीव और अर्न्ड लीव की तुलना करें — वार्षिक अधिकार, कैरी-फॉरवर्ड, इनकैशमेंट और मेडिकल सर्टिफिकेट की शर्तों के संदर्भ में।",
+      "id": 18,
+      "question": "travel policy me daily allowance kitna milta hai?",
       "conversation_id": null,
       "expected_type": "covered",
       "relevant_document_names": [
-        "Leave_Policy_1.pdf"
-      ]
-    },
-    {
-      "id": 3,
-      "_language": "kn",
-      "question": "ಅನಾರೋಗ್ಯ ರಜೆ ಮತ್ತು ಗಳಿಸಿದ ರಜೆಯನ್ನು ವಾರ್ಷಿಕ ಹಕ್ಕು, ಮುಂದಿನ ವರ್ಷಕ್ಕೆ ಒಯ್ಯುವುದು (carry forward), ನಗದೀಕರಣ ಮತ್ತು ವೈದ್ಯಕೀಯ ಪ್ರಮಾಣಪತ್ರದ ಅಗತ್ಯಗಳ ದೃಷ್ಟಿಯಿಂದ ಹೋಲಿಸಿ.",
-      "conversation_id": null,
-      "expected_type": "covered",
-      "relevant_document_names": [
-        "Leave_Policy_1.pdf"
+        "1714554179_Domestic Travel Policy Version 2.0.pdf"
       ]
     }
   ]

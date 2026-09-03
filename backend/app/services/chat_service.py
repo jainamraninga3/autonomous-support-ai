@@ -59,9 +59,23 @@ class ChatService:
 
         logger.info("Handling chat message for conversation_id=%s", chat_session.id)
 
+        # Read history BEFORE adding the new message, so the current
+        # question isn't in its own context.
+        previous = await self.chat_repository.get_recent_messages(chat_session.id, limit=6)
+        history = [(message.role, message.content) for message in previous]
+
         await self.chat_repository.add_message(chat_session.id, role="user", content=request.message)
 
-        result = await self.graph.ainvoke(initial_state(request.message))
+        result = await self.graph.ainvoke(
+            initial_state(
+                request.message,
+                history=history,
+                limit=request.limit,
+                alpha=request.alpha,
+                rerank=request.rerank,
+                top_k=request.top_k,
+            )
+        )
         reply = result["response"] or ""
         citations = [_to_citation_response(c) for c in result.get("citations") or []]
 

@@ -216,3 +216,60 @@ async def test_delete_document_raises_not_found_for_missing_document(tmp_path) -
 
     with pytest.raises(NotFoundError):
         await service.delete_document(DOCUMENT_ID)
+
+
+@pytest.mark.asyncio
+async def test_ingest_prunes_earlier_versions_from_weaviate(tmp_path, monkeypatch) -> None:
+    """Chunk objects are keyed by (document_id, version, chunk_index), so
+    embedding a NEW version writes new objects instead of replacing the
+    old ones. Nothing cleaned those up, and retrieval doesn't filter by
+    version — so stale text kept competing with current text in every
+    search and the collection grew on each re-process."""
+    document = SimpleNamespace(id=DOCUMENT_ID, name="policy.pdf")
+    version = SimpleNamespace(version=2)
+    repository = _FakeRepository(document=document, version=version)
+    monkeypatch.setattr("app.services.document_service.is_already_embedded", lambda *a, **k: False)
+
+    async def fake_embed_document(session_factory, document_id, version, weaviate_client):
+        return 4
+
+    monkeypatch.setattr("app.services.document_service.embed_document", fake_embed_document)
+
+    weaviate_client = _FakeWeaviateClient(exists=True)
+    service = _make_service(tmp_path, repository=repository, weaviate_client=weaviate_client)
+
+    await service.ingest(DOCUMENT_ID, version=None, force=False)
+
+    # One delete_many issued, scoped to this document and excluding the
+    # version we just embedded.
+    assert len(weaviate_client.collections.deleted_filters) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_failed_prune_does_not_fail_a_successful_embed(tmp_path, monkeypatch) -> None:
+    """The embedding worked. Raising here would report the whole ingest as
+    failed when the only casualty is leftover stale chunks — which is the
+    state it was already in."""
+    document = SimpleNamespace(id=DOCUMENT_ID, name="policy.pdf")
+    repository = _FakeRepository(document=document, version=SimpleNamespace(version=1))
+    monkeypatch.setattr("app.services.document_service.is_already_embedded", lambda *a, **k: False)
+
+    async def fake_embed_document(*args, **kwargs):
+        return 4
+
+    monkeypatch.setattr("app.services.document_service.embed_document", fake_embed_document)
+
+    class _ExplodingCollections:
+        def exists(self, name):
+            return True
+
+        def get(self, name):
+            raise RuntimeError("weaviate went away")
+
+    weaviate_client = SimpleNamespace(collections=_ExplodingCollections())
+    service = _make_service(tmp_path, repository=repository, weaviate_client=weaviate_client)
+
+    _, count, already = await service.ingest(DOCUMENT_ID, version=None, force=False)
+
+    assert count == 4
+    assert already is False

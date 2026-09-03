@@ -26,6 +26,44 @@ class ChatRequest(BaseModel):
         ),
     )
 
+    # --- Retrieval overrides (optional; omit for the configured defaults) ---
+    # These were the whole reason a second endpoint (`POST /api/v1/rag/ask`)
+    # existed. Folding them in here removed that duplicate RAG path, which
+    # had drifted into behaving subtly differently. Every one defaults to
+    # None meaning "use the configured value", so a plain
+    # {"message": "..."} request behaves exactly as it always did.
+    limit: int | None = Field(
+        default=None,
+        ge=1,
+        le=100,
+        description="Stage 1 candidates to retrieve before selection. Default 30.",
+    )
+    alpha: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "Hybrid search balance: 0.0 = BM25 (keyword) only, 1.0 = dense vector only. "
+            "Default 0.5. Worth raising for non-English questions, where BM25 has no "
+            "lexical overlap with English documents to match on."
+        ),
+    )
+    rerank: bool | None = Field(
+        default=None,
+        description=(
+            "Run the BGE-Reranker-v2-M3 cross-encoder over the candidates. Defaults to "
+            "the RERANK_ENABLED setting (false) — measured as ~3x the latency for no "
+            "score gain on this corpus. Setting this true the first time downloads a "
+            "~2.3GB model."
+        ),
+    )
+    top_k: int | None = Field(
+        default=None,
+        ge=1,
+        le=50,
+        description="Maximum chunks passed to generation as context. Defaults to RERANK_TOP_K (10).",
+    )
+
     model_config = {"json_schema_extra": {"example": {"message": "What is the leave policy?", "conversation_id": None}}}
 
 
@@ -92,14 +130,20 @@ class ChatResponse(BaseModel):
     answer_source: str | None = Field(
         default=None,
         description=(
-            "Which path in the graph produced `reply`: "
-            "'off_topic_refusal' (classify said GENERAL, fixed refusal, no LLM call), "
-            "'small_talk' (a bare greeting or pleasantry — a short conversational reply, no "
-            "retrieval, citations empty), "
-            "'rag' (a real, document-grounded answer, verified against its own citations), or "
-            "'general_fallback' (classify said RAG_REQUIRED but nothing relevant was found, "
-            "so the LLM answered from general knowledge — reply discloses this, citations "
-            "stay empty). Lets a caller tell these apart programmatically instead of "
-            "string-matching the reply text."
+            "Which path in the graph produced `reply`. Lets a caller tell these apart "
+            "programmatically instead of string-matching the reply text: "
+            "'rag' — a document-grounded answer, verified against its own citations. "
+            "'off_topic' — not a company question (maths, coding, general knowledge), so it "
+            "was politely declined with a fixed message. NO LLM call is made on this path: "
+            "that is the misuse and prompt-injection boundary, and it only holds because the "
+            "message never reaches the model. "
+            "'general_fallback' — a company question the documents didn't cover; answered from "
+            "general knowledge with a note saying so, citations empty. "
+            "'unverified_fallback' — the documents produced an answer but verification could "
+            "not confirm it was supported, so that answer was DISCARDED and replaced with a "
+            "general-knowledge one plus a note; `verified` is false and "
+            "`verification_reason` says why. "
+            "'small_talk' — a greeting, thanks, or a question about the assistant itself; "
+            "answered conversationally with no retrieval."
         ),
     )

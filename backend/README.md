@@ -5,13 +5,14 @@ workflow implementing plan.md's full "Final V1 Pipeline": query
 classification (off-topic / small talk / RAG-required) → query rewriting
 → hybrid search → grounded answer generation with citations → answer
 verification. `POST /api/v1/chat` runs this whole graph;
-`POST /api/v1/rag/ask` shares its front gate and query rewriting but
-skips verification and the general-knowledge fallback, and is the
-endpoint that exposes retrieval knobs (`limit`/`alpha`/`rerank`/`top_k`)
-per request — use it for tuning. Documents are uploaded and ingested via
-the HTTP API (see "Documents API" below) — upload a PDF to get a
-`document_id`, then use that id to embed it into Weaviate whenever you're
-ready.
+`/api/v1/chat` is the ONLY RAG endpoint. A second one
+(`POST /api/v1/rag/ask`) existed for retrieval tuning and was merged in:
+its `limit`/`alpha`/`rerank`/`top_k` knobs are now optional fields on the
+chat request. One code path instead of two that had drifted into
+behaving differently. Documents are uploaded and ingested via the HTTP
+API (see "Documents API" below) — upload a PDF to get a `document_id`,
+then use that id to embed it into Weaviate. To do a whole folder in one
+command, use `python -m scripts.ingest_folder ../policy`.
 
 **Ask in any language.** Questions in Hindi, Gujarati, Marathi, Kannada,
 Hinglish and so on are answered in that same language even though the
@@ -380,7 +381,7 @@ START -> classify -> GENERAL     -> refuse (out of scope, no LLM call) -> END
   invite a policy question, treat the message as data rather than
   instructions, state no company facts. An empty or implausibly long
   reply falls back to a fixed greeting. Before this existed, "Hi" was
-  classified GENERAL and refused — and on `/api/v1/rag/ask` it ran a
+  classified GENERAL and refused, and on the tuning path it ran a
   rewrite, a BGE-M3 model load, a 39-second reranker pass and a
   generation call to find nothing.
 - **Rewrite** (`app/rag/query_rewriting.py`) — improves the query for
@@ -392,7 +393,7 @@ START -> classify -> GENERAL     -> refuse (out of scope, no LLM call) -> END
   Runs concurrently (`asyncio.gather`) with the English translation used
   for the second retrieval pass, so that translation adds no wall-clock.
 - **Retrieve/generate** — the same hybrid search → rerank → grounded
-  answer generation already used by `scripts.ask`/`/api/v1/rag/ask`. The
+  answer generation already used by `scripts.ask`. The
   grounded-answer prompt instructs the LLM to reply with an exact
   sentinel token when the retrieved context doesn't actually answer the
   question; `generate_answer()` detects that (or zero chunks retrieved
@@ -461,29 +462,6 @@ calling the LLM directly.
   behave oddly since it doesn't understand the prompts — fine for
   proving the flow wires together, not for real answers). See "Multiple
   Groq API keys" below for automatic rate-limit fallback.
-- `POST /api/v1/rag/ask` — the tuning endpoint: same front gate
-  (classify → small talk / off-topic refusal / RAG) and same query
-  rewriting as the graph, then hybrid search → optional rerank →
-  grounded answer with citations. No verification and no
-  general-knowledge fallback. Body: `{"question": "...", "limit": 30,
-  "alpha": 0.5, "rerank": true, "top_k": 10}` (all fields but `question`
-  optional). `rerank` is tri-state: omit it or send `null` to follow the
-  app-wide `RERANK_ENABLED` (default false), or send `true`/`false` to
-  override for one request — which is the point of this endpoint.
-  **Swagger prefills `"rerank": true`**, so delete that line unless you
-  want reranking; otherwise the first such call downloads the ~2.3GB
-  reranker model and looks like a hang.
-  Returns `answer`, `citations`, `was_answerable`, `rewritten_query`,
-  `english_query`, and `classification`. Classification runs BEFORE the
-  Weaviate checks, so a greeting is answered even with nothing ingested;
-  for small talk and off-topic refusals `citations` is empty and
-  `was_answerable` is false — that is not a failure to find an answer,
-  it means retrieval never ran. Returns `404` if no documents have been
-  ingested yet (the
-  `DocumentChunk` collection doesn't exist), `503` if Weaviate isn't
-  reachable or the embedding/reranking dependencies aren't installed.
-  The Weaviate client is opened once at app startup (not reconnected per
-  request) — see `app.main`'s `lifespan`.
 - `POST /api/v1/documents/upload`, `POST /api/v1/documents/{id}/ingest`,
   `GET /api/v1/documents`, `GET /api/v1/documents/{id}`,
   `DELETE /api/v1/documents/{id}` — see "Documents API" above.

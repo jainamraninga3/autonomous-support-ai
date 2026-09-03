@@ -45,3 +45,4 @@ class DocumentListItem(BaseModel):
 class DocumentDeleteResponse(BaseModel):
     document_id: UUID
     message: str
+
