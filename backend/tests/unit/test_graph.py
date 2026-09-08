@@ -13,7 +13,7 @@ import pytest
 
 from app.graph.state import initial_state
 from app.core.config import get_settings
-from app.graph.workflow import build_graph
+from app.graph.workflow import _NOT_IN_DOCUMENTS_NOTE, build_graph
 from app.llm.base import LLMClient
 
 
@@ -209,7 +209,10 @@ async def test_rag_query_with_no_weaviate_client_falls_back_to_disclosed_general
     assert result["was_answerable"] is False
     assert result["verified"] is None
     assert result["citations"] == []
-    assert "Not found in our documents" in result["response"]
+    # Asserted against the constant, not its wording: the point is that a
+    # general-knowledge answer carries the not-from-your-documents warning,
+    # and rewording the banner should not fail this test.
+    assert result["response"].startswith(_NOT_IN_DOCUMENTS_NOTE)
     assert "a general-knowledge reply" in result["response"]
 
 
@@ -240,7 +243,10 @@ async def test_rag_query_where_llm_says_not_found_in_context_falls_back_to_gener
     assert result["was_answerable"] is False
     assert result["verified"] is None
     assert result["citations"] == []
-    assert "Not found in our documents" in result["response"]
+    # Asserted against the constant, not its wording: the point is that a
+    # general-knowledge answer carries the not-from-your-documents warning,
+    # and rewording the banner should not fail this test.
+    assert result["response"].startswith(_NOT_IN_DOCUMENTS_NOTE)
     assert "Most companies allow 2-3 WFH days per week." in result["response"]
 
 

@@ -75,9 +75,9 @@ class Settings(BaseSettings):
         return [key for key in (self.GROQ_API_KEY, self.GROQ_API_1, self.GROQ_API_2, self.GROQ_API_3) if key]
 
     # --- Document ingestion ---
-    # Set to 100/10 at the user's explicit direction, overriding the
-    # 600/100 that `chunk_pages` defaults to. Recorded here because it is
-    # a measured trade, not an oversight: at ~100 tokens this corpus's
+    # HISTORY, kept because it names the exact failure mode and predicted
+    # this change. Was 100/10, set at the user's explicit direction over
+    # the 600/100 that `chunk_pages` defaults to: at ~100 tokens this corpus's
     # policy text splits mid-sentence, and a 10-token overlap is too
     # narrow to guarantee a multi-clause sentence survives whole in
     # either neighbour. That exact failure produced a wrong answer —
@@ -87,8 +87,24 @@ class Settings(BaseSettings):
     # not in the policy at all. If that class of error reappears, this is
     # the first thing to raise; parent-child chunking (plan.md section
     # 10) is the way to keep small retrieval units without it.
-    CHUNK_SIZE_TOKENS: int = 100
-    CHUNK_OVERLAP_TOKENS: int = 10
+    # 100/10 -> 500/100 on 2026-09-08, from a measured retrieval failure.
+    #
+    # At 100 tokens the corpus was 481 chunks averaging 97 tokens, and
+    # clauses were being cut mid-sentence. The verifier caught the
+    # consequence twice on one question: it rejected an answer because
+    # "the policy fragment ends with 'A weekly off or declared holiday
+    # falling within a'" — the model had completed the sentence from
+    # prior knowledge, correctly, but unsupported by the fragment it was
+    # given. Small chunks do not just lose context; they invite the model
+    # to finish the thought.
+    #
+    # 500/100 keeps a policy clause whole and, with RERANK_TOP_K=5, gives
+    # ~2500 tokens of context instead of ~500.
+    #
+    # CHANGING THIS REQUIRES RE-INGESTING: chunks are stored, so existing
+    # documents keep their old 100-token chunks until re-uploaded.
+    CHUNK_SIZE_TOKENS: int = 500
+    CHUNK_OVERLAP_TOKENS: int = 100
 
     # --- Embeddings (dense vectors for Weaviate) ---
     # BGE-M3 per plan.md section 11. Loading this model requires `torch`
@@ -104,7 +120,25 @@ class Settings(BaseSettings):
     # No RERANK_SCORE_THRESHOLD default is set (None = cap by count
     # only) since there's no evaluation set yet to derive one from.
     RERANKER_MODEL_NAME: str = "BAAI/bge-reranker-v2-m3"
-    RERANK_TOP_K: int = 10
+    # 10 -> 5 on 2026-09-08, from an observed retrieval failure rather
+    # than a guess. "what is the leave policy" returned 10 chunks: 7 from
+    # Leave_Policy.pdf and 3 from Maternity_Benefit_Policy.pdf and
+    # Separation_Policy.pdf. All were technically leave-related, so the
+    # verifier passed the answer — but the model dutifully wrote up every
+    # one of them and produced a page-long table covering tubectomy leave
+    # and notice-period shortfall for someone who asked a one-line
+    # question.
+    #
+    # NOTE THIS APPLIES WITH RERANKING OFF TOO (see RERANK_ENABLED
+    # below): `retrieve_node` uses it to slice the RRF-fused candidate
+    # list, so it is the context size for every request either way. The
+    # name is now misleading and worth renaming when something else
+    # touches this area.
+    #
+    # The trade-off is real: a question whose answer genuinely spans 6+
+    # chunks will now lose the tail. Raise it per-request with `top_k` in
+    # the chat payload rather than changing this back.
+    RERANK_TOP_K: int = 5
     RERANK_SCORE_THRESHOLD: float | None = None
 
     # Defaults to False: the evaluation set (backend/rag_chat_test) now

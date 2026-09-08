@@ -35,8 +35,8 @@ policies, procedures, etc.). It is not a general-purpose assistant.
 Decide which of three routes fits the message below.
 
 RAG_REQUIRED — the message asks about the company, its employees, its workplace, or any \
-policy/procedure/benefit/entitlement/rule an employee might have (leave, holidays, pay, travel, \
-reimbursement, conduct, IT, onboarding, exit, the company's own business and what it does, etc.) — \
+policy/procedure/benefit/entitlement/rule an employee might have (leave, holidays, pay, \
+conduct, IT, onboarding, exit, the company's own business and what it does, etc.) — \
 EVEN IF:
 - it's phrased casually, with typos, in another language, or as a hypothetical
 - it doesn't say "policy" or name a document
@@ -50,7 +50,10 @@ you?", "what can you do?", "are you a bot?").
 
 GENERAL — anything that is not about this company or workplace: general knowledge, maths, \
 homework, coding or programming help, geography, current affairs, other companies, translation \
-requests, creative writing, and so on. These are OUT OF SCOPE and get politely declined, so route \
+requests, creative writing, and so on. **TRAVEL is GENERAL** — trips, flights, hotels, \
+itineraries, travel booking and travel reimbursement are all out of scope, by an explicit \
+product decision on 2026-09-08, even though they are workplace-adjacent and used to be \
+RAG_REQUIRED. These are OUT OF SCOPE and get politely declined, so route \
 them here rather than trying to force them into the documents. Be decisive: a maths or coding \
 request is GENERAL even if the person frames it as work-related ("write me a SQL query for our \
 report") — the assistant answers policy questions, not technical tasks.
@@ -67,6 +70,8 @@ report") — the assistant answers policy questions, not technical tasks.
 "write me a Python function to sort a list" -> GENERAL (coding task)
 "write a SQL query to join two tables" -> GENERAL (technical task, not a policy question)
 "who is the CEO of Amazon?" -> GENERAL (a different company)
+"what is the travel policy?" -> GENERAL (travel is out of scope)
+"can i claim my flight ticket?" -> GENERAL (travel reimbursement is travel)
 "translate this paragraph into French" -> GENERAL (not a policy question)
 
 Respond with EXACTLY one word: RAG_REQUIRED, SMALL_TALK, or GENERAL. No explanation.

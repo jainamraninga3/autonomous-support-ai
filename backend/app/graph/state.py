@@ -33,6 +33,12 @@ class GraphState(TypedDict):
     was_answerable: bool | None
     verified: bool | None
     verification_reason: str | None
+    # How many times `generate` has run for this question. Starts at 0
+    # and is what BOUNDS the verify -> generate cycle: LangGraph will
+    # loop forever otherwise, and a verifier that rejects every attempt
+    # would spend Groq quota until the recursion limit killed the
+    # request.
+    generation_attempts: int
     response: str | None
     answer_source: str | None
 
@@ -69,6 +75,7 @@ def initial_state(
         was_answerable=None,
         verified=None,
         verification_reason=None,
+        generation_attempts=0,
         response=None,
         answer_source=None,
     )

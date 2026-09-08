@@ -6,7 +6,8 @@ START -> classify -> SMALL_TALK    -> conversational reply         -> END
                   -> RAG_REQUIRED  -> rewrite -> retrieve -> generate
                                        -> answerable? -> verify
                                                           -> supported   -> END
-                                                          -> unsupported -> general answer -> END
+                                                          -> unsupported -> RETRY generate (once)
+                                                          -> still bad   -> general answer -> END
                                        -> not answerable ------------------> general answer -> END
 
 **The GENERAL branch declines without calling the LLM, on purpose.**
@@ -26,9 +27,10 @@ questions already judged company-related, so they are not a way around
 the boundary above:
 - `general_fallback` — a company question the documents didn't cover.
 - `unverified_fallback` — the documents produced an answer, but
-  verification couldn't confirm it was supported, so it was discarded
-  and answered generally instead. Previously this path returned only "I
-  could not verify this", which left the user with nothing.
+  verification could not confirm it even after ONE regeneration with the
+  verifier's objection fed back in. Only then is it discarded. Without
+  that retry, a whole grounded answer with citations was thrown away
+  over a single unsupported sentence.
 
 Both use the deliberately restrained prompt in
 `app/rag/generation/general_answer.py`: a long generic essay about "what
@@ -73,14 +75,34 @@ logger = get_logger(__name__)
 # and plain — the earlier wording read like an apology and buried the
 # answer under it.
 _NOT_IN_DOCUMENTS_NOTE = (
-    "_Not found in our documents — answering from general knowledge, "
-    "so please confirm anything policy-specific with HR._\n\n"
+    "> ⚠️ **Not from your company's documents.**\n"
+    "> I couldn't find this in the uploaded policies, so the answer below is "
+    "**general information from the internet** — it is NOT your company's "
+    "policy and the figures in it are not yours. Confirm anything that "
+    "matters with HR.\n\n"
 )
 
+# How many times `generate` may run for one question, including the
+# first. 2 = one original attempt plus one correction pass. See
+# `_route_after_verify`.
+_MAX_GENERATION_ATTEMPTS = 2
+
 _UNVERIFIED_NOTE = (
-    "_Our documents mention this, but I couldn't confirm the details well enough to "
-    "quote them as policy — here's what I can tell you generally instead._\n\n"
+    "> ⚠️ **Not from your company's documents.**\n"
+    "> Your documents do mention this, but I couldn't confirm the details well "
+    "enough to quote them as policy, so I've discarded that draft. The answer "
+    "below is **general information from the internet** — not your company's "
+    "policy. Worth asking again in different words, since the material does "
+    "appear to be there; otherwise check with HR.\n\n"
 )
+# Both notes are prepended to an answer produced by the UNRESTRAINED
+# prompt in `general_answer.py` (see its docstring for the risk that
+# accepts). They are kept DISTINCT rather than merged because they call
+# for different next actions: "found nothing" means ask HR, whereas
+# "found it but couldn't verify it" means rephrase and try again — the
+# material is in the corpus. Collapsing them would lose that, and a
+# person told to go to HR will not retry a question that would have
+# worked.
 
 # Sent for anything classified GENERAL. Deliberately fixed text: no LLM
 # call happens on this path at all, so there is nothing for a crafted
@@ -89,11 +111,12 @@ _UNVERIFIED_NOTE = (
 # version ("I can't help with unrelated topics like general knowledge,
 # math, or coding questions") read as a rebuke.
 _OUT_OF_SCOPE_ANSWER = (
-    "I'm the assistant for our company's policies and documents — things like leave, travel, "
-    "reimbursements, IT rules, conduct, and joining or exit processes. I'm not set up to work "
-    "through maths, coding, or general questions, so I'd only guess at those.\n\n"
-    "Ask me anything about how things work here and I'll find it in the documents for you."
+    "I'm the assistant for our company's policies and documents — things like company policy, "
+    "IT rules, conduct, and joining or exit processes. I'm not set up to work through maths, "
+    "coding, or travel, so I'd only guess at those.\n\n"
+    "Ask me anything about how things work here."
 )
+
 
 def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
     """Compile the full classify -> (general | RAG) -> verify workflow.
@@ -216,8 +239,23 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         return {"chunks": chunks}
 
     async def generate_node(state: GraphState) -> dict:
-        result = await generate_answer(state["original_query"], state["chunks"], llm_client)
-        return {"answer": result.answer, "citations": result.citations, "was_answerable": result.was_answerable}
+        # On a retry the verifier's objection is passed back in, so the
+        # model is told exactly which claim to drop rather than being
+        # asked to try again blind.
+        attempt = state["generation_attempts"] + 1
+        objection = state["verification_reason"] if state["generation_attempts"] else None
+        if objection:
+            logger.info("Regenerating (attempt %d) after: %s", attempt, objection)
+
+        result = await generate_answer(
+            state["original_query"], state["chunks"], llm_client, objection=objection
+        )
+        return {
+            "answer": result.answer,
+            "citations": result.citations,
+            "was_answerable": result.was_answerable,
+            "generation_attempts": attempt,
+        }
 
     async def general_fallback_node(state: GraphState) -> dict:
         # A question `classify` judged company-related, but the documents
@@ -251,10 +289,14 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         # — the ungrounded answer is still discarded (that part was
         # right), but the user gets something useful instead of a wall.
         if not verification.supported:
+            # Citations are deliberately NOT cleared here. The answer may
+            # be regenerated and pass, in which case its citations must
+            # still be there — and clearing them made retrieval metrics
+            # read 0 for every rejected answer, which looked like a
+            # retrieval failure when retrieval had worked fine.
             return {
                 "verified": False,
                 "verification_reason": verification.reasoning,
-                "citations": [],
             }
 
         return {
@@ -275,9 +317,30 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         return "verify" if state["was_answerable"] else "general_fallback"
 
     def _route_after_verify(state: GraphState) -> str:
-        # A verified answer is done. An unverified one falls through to a
-        # general-knowledge answer rather than dead-ending.
-        return END if state["verified"] else "general_fallback"
+        """Done, retry once, or give up.
+
+        The retry budget is ONE. Each attempt costs a generate + a verify
+        call against a Groq token quota, and a claim rejected twice is
+        usually one the model believes — a third attempt tends to return
+        the same sentence in new words rather than dropping it.
+
+        Throwing away a whole grounded answer with citations because ONE
+        sentence was unsupported is the failure this fixes. Observed
+        2026-09-08: a leave-policy answer built from 10 real chunks was
+        discarded entirely over an invented "26 weeks paid maternity
+        leave", and replaced by a general-knowledge reply with no
+        citations at all.
+        """
+        if state["verified"]:
+            return END
+        if state["generation_attempts"] < _MAX_GENERATION_ATTEMPTS:
+            return "generate"
+        logger.warning(
+            "Answer still unverified after %d attempts — falling back. Last objection: %s",
+            state["generation_attempts"],
+            state["verification_reason"],
+        )
+        return "general_fallback"
 
     graph = StateGraph(GraphState)
     graph.add_node("classify", classify_node)
@@ -303,8 +366,13 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         "generate", _route_after_generate, {"verify": "verify", "general_fallback": "general_fallback"}
     )
     graph.add_edge("general_fallback", END)
+    # The one cycle in this graph: verify -> generate. Bounded by
+    # `generation_attempts` in `_route_after_verify`; without that bound
+    # LangGraph would loop until its recursion limit.
     graph.add_conditional_edges(
-        "verify", _route_after_verify, {END: END, "general_fallback": "general_fallback"}
+        "verify",
+        _route_after_verify,
+        {END: END, "generate": "generate", "general_fallback": "general_fallback"},
     )
 
     return graph.compile()

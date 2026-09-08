@@ -1,6 +1,7 @@
 """Shared FastAPI dependency providers."""
 
 from collections.abc import AsyncGenerator
+from functools import lru_cache
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -24,14 +25,29 @@ async def get_session() -> AsyncGenerator[AsyncSession, None]:
         yield session
 
 
+@lru_cache
 def get_llm_client() -> LLMClient:
     """Provide the configured LLM client implementation.
 
     Uses Groq when at least one of `GROQ_API_KEY`/`GROQ_API_1`/`_2`/`_3`
-    is set (falling through to the next configured key on a rate limit —
-    see `GroqLLMClient`); falls back to the echo stub otherwise (e.g.
-    local dev without a key, or tests) so the app still boots and the
-    chat endpoint stays usable without external calls.
+    is set (falling through to the next configured key on a rate limit
+    or a rejected key — see `GroqLLMClient`); falls back to the echo stub
+    otherwise (e.g. local dev without a key, or tests) so the app still
+    boots and the chat endpoint stays usable without external calls.
+
+    **`lru_cache` is what makes `GroqLLMClient`'s key stickiness real.**
+    Without it FastAPI built a fresh client per request, so
+    `_current_index` reset to 0 every time and a revoked primary key cost
+    a wasted round trip on EVERY chat rather than one per process.
+    Measured 2026-09-08: a dead `GROQ_API_KEY` in front of three working
+    keys produced one 401 per request, indefinitely.
+
+    It also shares the underlying httpx connection pool across requests,
+    which is what you want from an HTTP client anyway.
+
+    The cost is that a key change in `.env` needs a process restart to
+    take effect. That is already true of `get_settings()`, which is
+    `lru_cache`d for the same reason, so this adds no new surprise.
     """
     settings = get_settings()
     keys = settings.groq_api_keys
@@ -54,9 +70,10 @@ def get_chat_service(
     """Provide a ChatService instance with its dependencies injected.
 
     Builds the LangGraph workflow fresh per request (cheap — it's just
-    wiring, not model loading) around this request's LLM client and the
-    app-wide Weaviate client. See `get_rag_query_service` for the same
-    `getattr` guard reasoning on `weaviate_client`.
+    wiring, not model loading) around the process-wide LLM client and the
+    app-wide Weaviate client. The LLM client is shared rather than
+    per-request since `get_llm_client` became `lru_cache`d; the graph
+    itself stays per-request because it holds no state between calls.
     """
     graph = build_graph(
         llm_client=llm_client,

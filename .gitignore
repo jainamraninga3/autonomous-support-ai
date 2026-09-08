@@ -63,9 +63,23 @@ pip-wheel-metadata/
 *.sqlite
 
 
-# Optional: ignore uploaded model/cache folders if generated later
-models/
-checkpoints/
-cache/
+# Downloaded ML weights and caches.
+#
+# ANCHORED WITH A LEADING SLASH, and that is not cosmetic. These were
+# previously written as `models/`, `checkpoints/`, `cache/` — with no
+# slash, a git pattern matches a directory of that name at ANY depth, so
+# `models/` silently excluded `backend/app/models/` and every ORM model
+# file went uncommitted for weeks. `app/models/__init__.py` stayed
+# tracked only because it predated the rule (.gitignore does not affect
+# already-tracked files), which is why `git status` never showed the
+# others as untracked and a fresh clone could not start at all.
+#
+# Keep these anchored, and never add an unanchored directory name that
+# could collide with a source directory.
+/models/
+/checkpoints/
+/cache/
+# BGE-M3 weights, when the container's volume is bind-mounted locally.
+backend/model_cache/
 
 
