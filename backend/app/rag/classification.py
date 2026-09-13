@@ -53,10 +53,15 @@ homework, coding or programming help, geography, current affairs, other companie
 requests, creative writing, and so on. **TRAVEL is GENERAL** — trips, flights, hotels, \
 itineraries, travel booking and travel reimbursement are all out of scope, by an explicit \
 product decision on 2026-09-08, even though they are workplace-adjacent and used to be \
-RAG_REQUIRED. These are OUT OF SCOPE and get politely declined, so route \
-them here rather than trying to force them into the documents. Be decisive: a maths or coding \
-request is GENERAL even if the person frames it as work-related ("write me a SQL query for our \
-report") — the assistant answers policy questions, not technical tasks.
+RAG_REQUIRED. **META-QUESTIONS ABOUT THE KNOWLEDGE BASE / DOCUMENT INVENTORY ARE ALSO GENERAL** — \
+questions asking about the presence, count, list, or metadata of documents/PDFs in the knowledge \
+base or database (e.g. "is Code of Conduct in this knowledge base?", "how many PDFs/documents are \
+in the knowledge base?", "what documents are uploaded?", "list all documents in the system"). The \
+assistant answers policy content questions (e.g. "what is the code of conduct on gifts?"), NOT \
+meta-questions about what documents exist in the knowledge base index or file repository. These \
+are OUT OF SCOPE and get politely declined, so route them here rather than trying to force them \
+into the documents. Be decisive: a maths, coding, or knowledge base inventory request is GENERAL \
+even if framed around work.
 
 {history_block}Examples:
 "What happens if an employee exhausts their sick leave?" -> RAG_REQUIRED
@@ -66,6 +71,9 @@ report") — the assistant answers policy questions, not technical tasks.
 "who are you?" -> SMALL_TALK (about the assistant)
 "thanks, that helps!" -> SMALL_TALK
 "hi, how many sick leaves do I get?" -> RAG_REQUIRED (the greeting is incidental)
+"is Code of Conduct in this knowledge base?" -> GENERAL (meta-question about knowledge base inventory/index)
+"how many PDF documents are in the knowledge base?" -> GENERAL (meta-question about stored document count)
+"what documents are uploaded in the knowledge base?" -> GENERAL (meta-question about stored files)
 "what is 2+2" -> GENERAL (maths)
 "write me a Python function to sort a list" -> GENERAL (coding task)
 "write a SQL query to join two tables" -> GENERAL (technical task, not a policy question)

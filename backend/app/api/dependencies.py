@@ -2,6 +2,7 @@
 
 from collections.abc import AsyncGenerator
 from functools import lru_cache
+from typing import Any
 
 from fastapi import Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -57,29 +58,44 @@ def get_llm_client() -> LLMClient:
     return StubLLMClient()
 
 
+from app.services.session_memory_service import SessionMemoryService
+
+
+def get_redis_client(request: Request) -> Any | None:
+    """Provide the application-wide async Redis client stored on app.state."""
+    return getattr(request.app.state, "redis_client", None)
+
+
 def get_chat_repository(session: AsyncSession = Depends(get_session)) -> ChatRepository:
     """Provide a ChatRepository bound to the request-scoped session."""
     return ChatRepository(session=session)
 
 
+def get_session_memory_service(
+    request: Request,
+    chat_repository: ChatRepository = Depends(get_chat_repository),
+) -> SessionMemoryService:
+    """Provide a SessionMemoryService using the app's Redis client and request-scoped ChatRepository."""
+    redis_client = get_redis_client(request)
+    return SessionMemoryService(chat_repository=chat_repository, redis_client=redis_client)
+
+
 def get_chat_service(
     request: Request,
     chat_repository: ChatRepository = Depends(get_chat_repository),
+    session_memory_service: SessionMemoryService = Depends(get_session_memory_service),
     llm_client: LLMClient = Depends(get_llm_client),
 ) -> ChatService:
-    """Provide a ChatService instance with its dependencies injected.
-
-    Builds the LangGraph workflow fresh per request (cheap — it's just
-    wiring, not model loading) around the process-wide LLM client and the
-    app-wide Weaviate client. The LLM client is shared rather than
-    per-request since `get_llm_client` became `lru_cache`d; the graph
-    itself stays per-request because it holds no state between calls.
-    """
+    """Provide a ChatService instance with its dependencies injected."""
     graph = build_graph(
         llm_client=llm_client,
         weaviate_client=getattr(request.app.state, "weaviate_client", None),
     )
-    return ChatService(chat_repository=chat_repository, graph=graph)
+    return ChatService(
+        chat_repository=chat_repository,
+        session_memory_service=session_memory_service,
+        graph=graph,
+    )
 
 
 def get_document_service(

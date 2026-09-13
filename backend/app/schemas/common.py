@@ -11,6 +11,7 @@ class HealthStatus(BaseModel):
     version: str
     database: str
     vector_store: str
+    session_memory: str = "disabled"
 
 
 class ErrorResponse(BaseModel):

@@ -45,24 +45,40 @@ def _parse_session_id(value: str | None) -> uuid.UUID | None:
         return None
 
 
+from app.services.session_memory_service import SessionMemoryService
+
+
 class ChatService:
     """Coordinates chat requests between the API layer, the LangGraph
     workflow, and persistence."""
 
-    def __init__(self, chat_repository: ChatRepository, graph: CompiledStateGraph) -> None:
+    def __init__(
+        self,
+        chat_repository: ChatRepository,
+        session_memory_service: SessionMemoryService,
+        graph: CompiledStateGraph,
+    ) -> None:
         self.chat_repository = chat_repository
+        self.session_memory_service = session_memory_service
         self.graph = graph
 
     async def handle_message(self, request: ChatRequest) -> ChatResponse:
         session_id = _parse_session_id(request.conversation_id)
-        chat_session = await self.chat_repository.get_or_create_session(session_id)
+        chat_session = await self.chat_repository.get_or_create_session(
+            session_id, user_id=request.user_id
+        )
 
-        logger.info("Handling chat message for conversation_id=%s", chat_session.id)
+        logger.info(
+            "Handling chat message for conversation_id=%s user_id=%s",
+            chat_session.id,
+            request.user_id,
+        )
 
-        # Read history BEFORE adding the new message, so the current
-        # question isn't in its own context.
-        previous = await self.chat_repository.get_recent_messages(chat_session.id, limit=6)
-        history = [(message.role, message.content) for message in previous]
+        # Read history BEFORE adding the new message, using SessionMemoryService
+        # (which checks Redis first, falling back to PostgreSQL on miss/error).
+        history = await self.session_memory_service.get_recent_history(
+            chat_session.id, user_id=request.user_id
+        )
 
         await self.chat_repository.add_message(chat_session.id, role="user", content=request.message)
 
@@ -81,6 +97,14 @@ class ChatService:
 
         await self.chat_repository.add_message(chat_session.id, role="assistant", content=reply)
         await self.chat_repository.session.commit()
+
+        # Asynchronously push interaction pair to Redis hot memory
+        await self.session_memory_service.append_message_pair(
+            chat_session.id,
+            request.user_id,
+            request.message,
+            reply,
+        )
 
         return ChatResponse(
             reply=reply,

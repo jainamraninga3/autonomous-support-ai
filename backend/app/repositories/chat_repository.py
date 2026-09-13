@@ -11,16 +11,21 @@ from app.repositories.base import BaseRepository
 class ChatRepository(BaseRepository[ChatSession]):
     """Persists chat sessions and messages."""
 
-    async def get_or_create_session(self, session_id: uuid.UUID | None) -> ChatSession:
+    async def get_or_create_session(
+        self, session_id: uuid.UUID | None, user_id: str | None = None
+    ) -> ChatSession:
         if session_id is not None:
             result = await self.session.execute(
                 select(ChatSession).where(ChatSession.id == session_id)
             )
             existing = result.scalar_one_or_none()
             if existing is not None:
+                if user_id and not existing.user_id:
+                    existing.user_id = user_id
+                    await self.session.flush()
                 return existing
 
-        chat_session = ChatSession(id=session_id or uuid.uuid4())
+        chat_session = ChatSession(id=session_id or uuid.uuid4(), user_id=user_id)
         self.session.add(chat_session)
         await self.session.flush()
         return chat_session

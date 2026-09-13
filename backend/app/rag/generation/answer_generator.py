@@ -132,6 +132,7 @@ Rules:
 - Do not invent information that is not present in the context.
 - Use {sentinel} ONLY when the context contains nothing relevant to the question at all. \
 Respond with EXACTLY the single word {sentinel} and nothing else in that case — no explanation, no apology.
+- Do NOT answer meta-questions about the knowledge base, database, or list of stored documents/PDFs (such as 'how many documents/PDFs are in the context/knowledge base', 'is [document] in this knowledge base', 'list all documents uploaded', 'what PDFs exist in the system'). If the question asks about the inventory, presence, list, count, or metadata of documents in the knowledge base rather than asking about a specific policy rule, respond with EXACTLY the single word {sentinel}.
 - If the context answers the question even partially, ANSWER IT with what the context does \
 contain — do not use {sentinel}. For a question with several parts (e.g. "compare X and Y", \
 or a question about several leave types at once), answer every part the context covers, \

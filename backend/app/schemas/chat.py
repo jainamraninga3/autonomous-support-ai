@@ -25,6 +25,10 @@ class ChatRequest(BaseModel):
             "silently starting a new one anyway."
         ),
     )
+    user_id: str | None = Field(
+        default=None,
+        description="Optional user identifier for session isolation boundary.",
+    )
 
     # --- Retrieval overrides (optional; omit for the configured defaults) ---
     # These were the whole reason a second endpoint (`POST /api/v1/rag/ask`)

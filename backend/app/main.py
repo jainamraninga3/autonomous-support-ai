@@ -12,6 +12,8 @@ from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
 from app.database.vector_store import get_weaviate_client
 
+from app.infrastructure.redis.client import create_redis_client, close_redis_client
+
 configure_logging()
 logger = get_logger(__name__)
 
@@ -31,8 +33,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
         )
         app.state.weaviate_client = None
 
+    if settings.SESSION_MEMORY_ENABLED:
+        app.state.redis_client = await create_redis_client()
+    else:
+        logger.info("Session memory (Redis) is disabled by configuration")
+        app.state.redis_client = None
+
     yield
 
+    if app.state.redis_client is not None:
+        await close_redis_client(app.state.redis_client)
     if app.state.weaviate_client is not None:
         app.state.weaviate_client.close()
     logger.info("Shutting down %s", settings.APP_NAME)

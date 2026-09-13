@@ -519,6 +519,24 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 
 ## Change Log (newest first)
 
+### 2026-09-13 — Redis Session Memory (Phases 1–4)
+**By:** Antigravity (Gemini 3.6 Flash).
+**Why:** Transitioned conversation memory from per-request PostgreSQL lookups to high-performance Redis hot session memory while maintaining PostgreSQL as the durable source of truth.
+
+- `docker-compose.yml` & `backend/requirements.txt` & `backend/app/core/config.py`: Added Redis 7 service, redis[hiredis] dependency, fakeredis for testing, and `SESSION_MEMORY_*` environment settings.
+- `app/infrastructure/redis/`: Created async Redis client (`client.py`) and `RedisSessionStore` (`session_store.py`) with `session:{user_id}:{session_id}` key schema and graceful error handling.
+- `app/models/chat.py`, `app/repositories/chat_repository.py`, `app/schemas/chat.py`, `migrations/versions/20260913_0002_*`: Added indexed `user_id` column to `chat_sessions` table and schema for multi-user session isolation.
+- `app/services/session_memory_service.py` & `app/services/session_context_builder.py`: Implemented PG-backed cache hit/miss orchestration, context tuple formatting, and cache rebuilding.
+- `app/services/chat_service.py` & `app/api/dependencies.py` & `app/main.py`: Wired `SessionMemoryService` into `ChatService` and FastAPI dependency graph, and added Redis lifespan management and health check status.
+- `tests/unit/test_*`: Added comprehensive unit tests for `RedisSessionStore`, `SessionMemoryService`, `SessionContextBuilder`, and `client.py`.
+
+### 2026-09-13 — Knowledge Base Meta-Question Classification & Guardrails Fix
+**By:** Antigravity (Gemini 3.6 Flash).
+**Why:** The user reported a bug where meta-questions about the knowledge base index / document repository (e.g., "is code of conduct still in this knowledge base?", "how many PDF documents are in the knowledge base?") were passing RAG retrieval and outputting document inventory summaries.
+
+- `app/rag/classification.py` — Updated `_CLASSIFICATION_PROMPT` so meta-questions probing document counts, file presence, or knowledge base document listings (e.g. "is Code of Conduct in this knowledge base?", "how many PDFs are uploaded?") are explicitly classified as `GENERAL` (off-topic refusal).
+- `app/rag/generation/answer_generator.py` — Added a secondary defense-in-depth instruction to `_GROUNDED_ANSWER_PROMPT` directing the model to return `{sentinel}` (`NOT_FOUND_IN_CONTEXT`) if asked to summarize document lists or report on knowledge base document metadata.
+
 ### 2026-09-03 — Off-topic boundary restored; fallback restrained; Next.js frontend; PDF text-extraction research (deferred)
 **By:** Claude (Opus 5), this session.
 **Why:** The user is shipping this to company employees and asked for the

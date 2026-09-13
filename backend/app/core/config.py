@@ -49,6 +49,23 @@ class Settings(BaseSettings):
     WEAVIATE_PORT: int = 8080
     WEAVIATE_GRPC_PORT: int = 50051
 
+    # --- Redis (hot session-memory cache) ---
+    # REDIS_URL defaults to localhost for Option B (local backend, Docker databases).
+    # docker-compose.yml overrides this to redis://redis:6379/0 for the
+    # containerised backend so service-name DNS resolution works.
+    REDIS_URL: str = "redis://localhost:6379/0"
+    # Set to False to disable the Redis layer entirely and fall through to
+    # PostgreSQL for every request — no code-path changes, just slower.
+    SESSION_MEMORY_ENABLED: bool = True
+    # How long a session key lives in Redis before expiring (seconds).
+    # Expiry removes ONLY the Redis cache; PostgreSQL retains all messages.
+    # The next request after expiry triggers a PG rebuild automatically.
+    SESSION_MEMORY_TTL_SECONDS: int = 86400  # 24 hours
+    # Maximum messages kept in the Redis hot copy per session.
+    # Older messages are trimmed from Redis but remain in PostgreSQL.
+    SESSION_MEMORY_MAX_MESSAGES: int = 20
+
+
     # --- Groq (LLM provider) ---
     # GROQ_API_KEY is tried first; GROQ_API_1/_2/_3 are optional extra
     # keys the client automatically falls through to, in order, whenever
