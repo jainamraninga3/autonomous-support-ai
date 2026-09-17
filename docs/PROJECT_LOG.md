@@ -519,6 +519,255 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 
 ## Change Log (newest first)
 
+### 2026-09-16 — A 4-second rate limit was failing the request
+
+**Why:** A `chat_test.py` run died four turns in:
+
+    tokens per minute (TPM): Limit 8000, Used 7956, Requested 641.
+    Please try again in 4.4775s.
+
+Groq meters tokens-per-MINUTE and tokens-per-DAY under the SAME 429, and
+the two need opposite responses. A per-minute limit clears in seconds —
+failing someone's question rather than pausing for four of them is
+absurd. A per-day limit says "5m42s" and must NOT be slept on, or a fast,
+clear error becomes a hung request. `GroqLLMClient` treated both
+identically: rotate through the keys, then raise.
+
+- `app/llm/base.py`: `_retry_after_seconds()` reads the `retry-after`
+  header, falling back to parsing the sentence in the body (the only
+  place the sub-second value appears). The rotation now records the
+  SOONEST wait any key reported; if every key is rate-limited and that
+  wait is <= 20s, `generate_reply` sleeps and retries the whole
+  rotation, up to a 45s total budget. Longer waits, and waits Groq did
+  not state, still fail immediately. The rotation moved into
+  `_try_every_key()` and the raise into `_raise_for()`, which now also
+  reports how long was spent waiting.
+- `tests/unit/test_llm_base.py`: three tests — a TPM message is waited
+  out and the call succeeds, a TPD message is NOT slept on and raises,
+  and both `4.4775s` and `5m42.144s` parse correctly. `asyncio.sleep` is
+  monkeypatched, so the suite stays fast. Suite: 125 passed.
+
+**Also found, from the same logs:** the four configured keys were not
+four quotas. Keys #0 and #3 belonged to the same organization and shared
+a counter (`org_01kva1f…`, identical `Used` value), so one was dead
+weight. Groq meters per MODEL as well as per org — `openai/gpt-oss-20b`
+and `qwen/qwen3.8-27b` have separate daily buckets from
+`openai/gpt-oss-120b`, which is the quickest unblock when the 120b is
+spent.
+
+**Also fixed:** `scripts/chat_test.py` caught only `URLError` and told
+the user "Is the backend up?" — wrong and misleading when the backend is
+up and the API keys are spent. It now catches `HTTPError` separately and
+prints the server's response body, which is how the TPM limit above was
+identified at all.
+
+### 2026-09-16 — PostgreSQL history came back in the wrong order, ~half the time
+
+**Why:** Auditing when and how each turn reaches Redis and PostgreSQL.
+The write ORDER is right — both messages are committed to PostgreSQL
+BEFORE the Redis push, so the cache can never run ahead of the source of
+truth, and a failed commit simply skips the push. The READ was broken.
+
+`created_at` defaults to `func.now()`. In PostgreSQL `now()` is the
+TRANSACTION start time, and one turn's user message and assistant reply
+are inserted in the same transaction — so both rows carry a
+byte-identical timestamp. `get_recent_messages` then broke the tie on
+`Message.id`, which is a random `uuid4`. Measured on the live database:
+
+    correct (assistant first, DESC) | scrambled (user first, DESC)
+                                 57 |                           64
+
+121 turns, 64 inverted — a coin flip, as a random tiebreaker must be.
+Whenever history came from PostgreSQL, roughly half of all turns handed
+the model the assistant's ANSWER before the QUESTION it answered.
+
+Redis was never affected: `RPUSH` preserves insertion order. So the
+cache was correct and the source of truth was not, and the corruption
+appeared only on a cache miss, a Redis outage, or after the 24h TTL —
+which is exactly why it survived this long.
+
+- `app/repositories/chat_repository.py`: ties now break on role
+  (`_ROLE_ORDER`), ranked ahead of the random id. A tie can only ever be
+  one turn's pair — one request is one transaction — and within a pair
+  the user always spoke first, so this is exact rather than heuristic.
+  Re-measured with the new ORDER BY against the same rows: **121 correct,
+  0 scrambled**. No migration needed; the alternative (a
+  `clock_timestamp()` default or a monotonic sequence column) is a schema
+  change and is not worth one here.
+- `tests/unit/test_chat_repository.py`: asserts the role rank appears in
+  the ORDER BY *before* the id, since after it the id still decides.
+  Sabotage-verified: restoring the old ORDER BY fails it. Suite: 122
+  passed.
+
+**Write ordering, confirmed correct and left alone:** read history ->
+add user message -> run graph -> add assistant message -> COMMIT ->
+push the pair to Redis. On a cache miss the rebuild happens before the
+new turn is written, so the pair is never double-counted.
+
+### 2026-09-16 — Session context reaches the ANSWER, not just the query
+
+**Why:** A test plan supplied by the user separated two abilities the app
+was treating as one: retrieving from the documents, and remembering what
+the person said earlier. Checking it against the code found the gap real
+— `generate_node` called `generate_answer(query, chunks, llm_client)`
+with NO history. Follow-ups appeared to work only because
+`rewrite_query` folds context into the SEARCH query; the answer itself
+never knew the person had said "I am a new joiner" or "call me Jain".
+
+- `app/rag/generation/answer_generator.py` + `app/graph/workflow.py`:
+  history is now passed to `generate_answer` and rendered above the
+  Context block (documents stay closest to the question, since that is
+  what the answer must be grounded in). Three rules added:
+  1. The conversation says WHO is asking and WHAT a follow-up refers to.
+  2. It is NEVER a source of policy facts and NEVER overrides the
+     Context. "I think casual leave is 20 days" against documents saying
+     7 must answer 7 — not 20, and not "you mentioned 20". This is the
+     distinction the user's plan was built around: memory personalises,
+     retrieval is authoritative.
+  3. No access to anyone's personal HR record. Asked for a remaining
+     balance or an employee ID, give the POLICY entitlement and say the
+     individual HRMS record is not visible. The annual entitlement is NOT
+     the remaining balance and must never be offered as one.
+  The history block is labelled a RECORD, not instructions, matching the
+  injection posture used in `small_talk.py` and `classification.py`.
+
+- `scripts/chat_test_memory.txt`: new. The user's multi-turn scenarios as
+  runnable conversations — pronoun resolution ("can it be carried
+  forward?" after Sick vs Earned Leave), four-turn new-joiner context,
+  personal-data refusals, memory-vs-policy conflicts, scope holding while
+  memory is in play.
+- `scripts/chat_test.py`: gained `--conversation-id`, so joining another
+  user's conversation can actually be tested.
+
+**Verified live** against the running stack (which already had the
+ownership fix): alice says "My name is Jainam" then "What is my name?"
+-> "Your name is Jainam." bob, passing ALICE'S conversation id, gets
+"I don't have your name from our conversation" AND a different
+conversation_id — the SQL ownership filter doing its job end to end.
+Suite: 121 passed.
+
+### 2026-09-16 — "what is my name": the first fix was not enough
+
+**Why:** The classifier changes below (a broadened SMALL_TALK definition
+plus four examples) did NOT work — verified live, the question still
+routed to `off_topic`. The reason is instruction POSITION, the same thing
+that has bitten this prompt before: SMALL_TALK is defined first, then
+GENERAL follows with "anything that is not about this company" and closes
+on "Be decisive". "What is my name" is not about the company, so the
+later, more forceful rule won.
+
+- `app/rag/classification.py`: the rule is now an OVERRIDE stated BEFORE
+  all three route definitions, not a clause inside one of them — "it
+  beats all three definitions below". GENERAL's closing push is now
+  answered in place: "GENERAL IS ONLY FOR THINGS WITH NO ANSWER HERE —
+  never for a question the conversation above already answers."
+- `scripts/check_routing.py`: new. The unit suite stubs the LLM, so it
+  can prove the routing CODE works but never the routing PROMPT — and
+  every routing bug so far has been in the prompt. This calls Groq for
+  real, needs no database or running backend, and asserts 14 cases.
+  Deliberately includes the routes that could be collateral damage
+  (travel, knowledge-base meta-questions, follow-up inheritance), because
+  a prompt edit that repairs one route usually breaks another. All 14
+  pass; the same script showed the "what is my name" failure before the
+  override went in.
+
+**Lesson worth keeping:** a prompt fix is not verified by the unit suite
+and not verified by reading it. It needs a real call.
+
+### 2026-09-16 — "what is my name" was declined as off-topic (first attempt)
+
+**Why:** Observed live. "my name is jainam" got a warm small-talk reply;
+"what is my name" then got the fixed out-of-scope refusal, which recited
+the maths/coding/travel scope at someone who had just introduced
+themselves. Two separate causes, both needed fixing:
+
+- `app/rag/classification.py`: SMALL_TALK covered questions about the
+  ASSISTANT but nothing about the CONVERSATION, so anything referring to
+  what was said a moment ago fell through to GENERAL. SMALL_TALK now
+  explicitly includes the person's own name, what they just asked, and
+  what the assistant just said, with four examples added.
+- `app/rag/generation/small_talk.py` + `app/graph/workflow.py`: the
+  small-talk node was called with the query ONLY — no history — so even
+  correctly routed, it could not have answered. It now takes `history`
+  and is told to answer from it, to say plainly when something genuinely
+  is not there, and never to recite its scope in reply. The history block
+  is labelled as a RECORD, not instructions, matching the injection
+  posture of the rest of that prompt.
+
+**Also added:** `backend/scripts/chat_test.py` — a dependency-free manual
+tester for `POST /api/v1/chat`. Questions given together run in ONE
+conversation so follow-ups and name-recall work; `-f` reads a file where
+a blank line starts a new conversation; interactive with no arguments.
+Prints route, chunk count, verified, seconds and the word/bullet/nested
+counts the brief-vs-detailed rules are tuned against.
+`backend/scripts/chat_test_questions.txt` seeds it with the cases this
+log has been fighting. Distinct from `rag_chat_test/`, which is the
+heavyweight LLM-judge harness — this one is for eyeballing a change.
+
+Suite: 121 passed.
+
+### 2026-09-16 — Session ownership enforced in SQL; history window regression
+
+**Why:** Reviewing the Redis session-memory work turned up two real bugs.
+
+- `app/repositories/chat_repository.py`: `get_or_create_session` selected
+  on `WHERE id = :session_id` alone. Anyone holding (or guessing) another
+  person's `conversation_id` got that person's `ChatSession` back, and
+  `get_recent_messages` then fed their conversation into the prompt.
+  Redis masked it — its key is namespaced by `user_id` — so the leak
+  surfaced only on a cache miss, a Redis outage, or after the TTL
+  expired. Ownership is now part of the same WHERE clause
+  (`id = :id AND (user_id = :user OR user_id IS NULL)`), never a Python
+  check after the fetch. Rows predating the `user_id` column are still
+  adopted by the first caller who claims them. A `session_id` that
+  exists but belongs to someone else now returns a NEW session under a
+  new id rather than the other user's — reusing the id would also have
+  collided on the primary key.
+- `app/services/session_memory_service.py`: the read window defaulted to
+  `SESSION_MEMORY_MAX_MESSAGES` (20), silently overriding the documented
+  `limit=6` on `get_recent_messages` — whose docstring says the small
+  window is deliberate, because long history pollutes retrieval with
+  terms from earlier turns. Every request had been carrying 20 messages
+  since session memory landed. Split into `_HISTORY_MESSAGES = 6` (what
+  each request READS) versus `SESSION_MEMORY_MAX_MESSAGES` (what Redis
+  KEEPS); the two are no longer the same number.
+- `tests/unit/test_chat_repository.py`: new. Asserts on the compiled SQL
+  rather than on behaviour, so the ownership predicate cannot quietly go
+  missing again. Sabotage-verified: restoring the old `WHERE id = ...`
+  fails exactly 2 of the 4. Suite: 121 passed.
+
+### 2026-09-11..16 — Answer length: brief by default, detailed on request
+
+**Why:** Answers to ordinary questions ran 200-800 words. "what is the
+leave policy" returned a bullet per leave type with every eligibility,
+carry-forward, encashment and application rule attached.
+
+- `app/rag/generation/answer_generator.py`: the grounded prompt now picks
+  one of two modes from the question. BRIEF is the default and has a
+  fixed shape — a `### Summary` sentence carrying the answer, then a
+  short `### Explanation` bullet list (one bullet per category with a
+  bold label for a broad question; at most 4 condition bullets for a
+  specific one), with a final `**Other Leave:**` bullet so no category is
+  silently dropped. DETAILED is entered only when the question asks for
+  it, judged on INTENT rather than exact words and in any language.
+- Three existing rules contradicted the new shape and were rescoped, not
+  deleted: "NEVER write a Summary section" now applies only to a TRAILING
+  restatement (the leading `### Summary` is required); the table rule no
+  longer blocks the entitlements list; the same wording inside DETAILED.
+- Added an anti-ambiguity rule with the observed failure as its example:
+  `"Sick Leave: 7 days per year (carry to 15)"` reads as though the
+  entitlement might be 15. Brevity never justifies a line the reader can
+  misread — drop the fact before abbreviating it into something wrong.
+- `app/core/config.py` + `backend/.env`: `RERANK_TOP_K` 10 -> 5,
+  `CHUNK_SIZE_TOKENS` 100 -> 500, `CHUNK_OVERLAP_TOKENS` 10 -> 100, each
+  from a measured retrieval failure (recorded in the config comments).
+  CHANGING THE CHUNK SETTINGS REQUIRES RE-INGESTING.
+
+**Gotcha that cost a round trip:** the compose bind mount at
+`docker-compose.yml:93` is commented out, so the image bakes the source
+in. `docker compose restart` reruns the OLD code; a prompt change needs
+`docker compose up -d --build backend`.
+
 ### 2026-09-13 — Redis Session Memory (Phases 1–4)
 **By:** Antigravity (Gemini 3.6 Flash).
 **Why:** Transitioned conversation memory from per-request PostgreSQL lookups to high-performance Redis hot session memory while maintaining PostgreSQL as the durable source of truth.

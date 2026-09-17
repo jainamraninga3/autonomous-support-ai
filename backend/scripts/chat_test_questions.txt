@@ -1,0 +1,30 @@
+# One question per line. A BLANK LINE starts a new conversation.
+# Lines starting with # are ignored. Add your own freely.
+#
+# Run: python scripts/chat_test.py -f scripts/chat_test_questions.txt
+
+# --- conversation memory ---
+my name is Jainam
+what is my name
+
+# --- small talk ---
+hi
+
+# --- brief mode: expect Summary + short Explanation, no wall of text ---
+what is leave policy
+
+# --- specific question: expect one sentence + at most 4 bullets ---
+how many sick leaves do i get
+
+# --- detailed mode: expect the full write-up ---
+explain the leave policy in detail
+
+# --- follow-up: must inherit its subject from the previous turn ---
+what is the sick leave policy
+and for new joiners?
+
+# --- out of scope: expect the fixed refusal, no LLM call ---
+what is 2+2
+
+# --- not in the documents: expect the internet warning banner ---
+what is the relocation allowance for a director

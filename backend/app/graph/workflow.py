@@ -160,7 +160,14 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         # A pure greeting is neither a document question nor something to
         # refuse — see app/rag/generation/small_talk.py for why this one
         # LLM call is safe where `general_node`'s deliberately isn't.
-        reply = await generate_small_talk_reply(state["original_query"], llm_client)
+        # History is passed so "what is my name?" right after "my name is
+        # Jainam" can be answered. Without it this node had no way to see
+        # the previous turn, and the question fell to GENERAL's fixed
+        # refusal — which recited the maths/coding/travel scope at someone
+        # who had just introduced themselves.
+        reply = await generate_small_talk_reply(
+            state["original_query"], llm_client, history=state["history"]
+        )
         return {
             "response": reply,
             "answer": reply,
@@ -247,8 +254,17 @@ def build_graph(llm_client: LLMClient, weaviate_client) -> CompiledStateGraph:
         if objection:
             logger.info("Regenerating (attempt %d) after: %s", attempt, objection)
 
+        # History goes in as CONTEXT ONLY — it tells the model who is
+        # asking and what a follow-up refers to. `answer_generator`'s
+        # prompt is explicit that it can never supply or override a
+        # policy fact: the documents are the record, and a user saying
+        # "I think casual leave is 20 days" does not make it 20.
         result = await generate_answer(
-            state["original_query"], state["chunks"], llm_client, objection=objection
+            state["original_query"],
+            state["chunks"],
+            llm_client,
+            objection=objection,
+            history=state["history"],
         )
         return {
             "answer": result.answer,

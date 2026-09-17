@@ -5,6 +5,8 @@ This decouples the rest of the application from any specific LLM vendor.
 available for tests/dev environments that don't have a `GROQ_API_KEY`.
 """
 
+import asyncio
+import re
 from abc import ABC, abstractmethod
 
 import groq
@@ -14,6 +16,40 @@ from app.core.exceptions import RateLimitError, ServiceUnavailableError
 from app.core.logging import get_logger
 
 logger = get_logger(__name__)
+
+# Groq meters two different things under the same 429, and they need
+# opposite responses. Tokens-per-MINUTE clears in seconds — failing the
+# user's question over a 4-second wait is absurd. Tokens-per-DAY does
+# not clear for hours, and sleeping on it just converts a fast, clear
+# error into a hung request. The retry-after value is what separates
+# them, so the wait itself decides whether to wait.
+_MAX_RETRY_WAIT_SECONDS = 20.0
+_MAX_TOTAL_WAIT_SECONDS = 45.0
+
+# "Please try again in 4.4775s" / "in 5m42.144s"
+_RETRY_AFTER_RE = re.compile(r"try again in (?:(\d+)m)?([\d.]+)s")
+
+
+def _retry_after_seconds(exc: Exception) -> float | None:
+    """How long Groq says to wait, or None if it did not say.
+
+    Prefers the `retry-after` header; falls back to the sentence in the
+    error body, which is the only place the sub-second value appears.
+    """
+    response = getattr(exc, "response", None)
+    header = getattr(response, "headers", {}) or {}
+    raw = header.get("retry-after")
+    if raw:
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            pass
+
+    match = _RETRY_AFTER_RE.search(str(exc))
+    if match:
+        minutes, seconds = match.groups()
+        return float(seconds) + (60.0 * int(minutes) if minutes else 0.0)
+    return None
 
 
 class LLMClient(ABC):
@@ -65,7 +101,46 @@ class GroqLLMClient(LLMClient):
         self._current_index = 0
 
     async def generate_reply(self, message: str) -> str:
+        waited = 0.0
+        while True:
+            reply, last_exc, retry_after = await self._try_every_key(message)
+            if last_exc is None:
+                return reply
+
+            # Every key refused. A per-MINUTE limit says "4.5s" and is
+            # worth sleeping through; a per-DAY limit says "5m42s" and is
+            # not. Anything without a stated wait is not slept on either.
+            if (
+                isinstance(last_exc, groq.RateLimitError)
+                and retry_after is not None
+                and retry_after <= _MAX_RETRY_WAIT_SECONDS
+                and waited + retry_after <= _MAX_TOTAL_WAIT_SECONDS
+            ):
+                pause = retry_after + 0.25  # clear the window, don't race it
+                logger.info(
+                    "All Groq keys are rate-limited for %.1fs — waiting and retrying "
+                    "(%.1fs of %.1fs budget used)",
+                    retry_after,
+                    waited,
+                    _MAX_TOTAL_WAIT_SECONDS,
+                )
+                await asyncio.sleep(pause)
+                waited += pause
+                continue
+
+            self._raise_for(last_exc, waited)
+
+    async def _try_every_key(
+        self, message: str
+    ) -> tuple[str, Exception | None, float | None]:
+        """One pass over all keys. Returns (reply, last error, shortest wait).
+
+        `last error` is None when a key succeeded. The shortest wait is
+        the soonest any key says it will accept traffic again — waiting
+        longer than that helps nobody.
+        """
         last_exc: Exception | None = None
+        soonest_retry: float | None = None
 
         for offset in range(len(self._clients)):
             index = (self._current_index + offset) % len(self._clients)
@@ -80,6 +155,9 @@ class GroqLLMClient(LLMClient):
                     "Groq key #%d rate-limited for model=%s, trying next key: %s", index, self.model, exc
                 )
                 last_exc = exc
+                retry_after = _retry_after_seconds(exc)
+                if retry_after is not None and (soonest_retry is None or retry_after < soonest_retry):
+                    soonest_retry = retry_after
                 continue
             except (groq.AuthenticationError, groq.PermissionDeniedError) as exc:
                 # A REVOKED OR WRONG KEY IS PER-KEY, so skip it exactly
@@ -123,23 +201,31 @@ class GroqLLMClient(LLMClient):
             reply = response.choices[0].message.content
             if not reply:
                 logger.warning("Groq returned an empty reply for model=%s", self.model)
-                return ""
-            return reply
+                return "", None, None
+            return reply, None, None
 
-        # Every key was skipped. Surfaced as a real error the caller can
-        # see and log, rather than falling through to the app's generic
-        # 500 handler — a Groq token quota being exhausted was previously
-        # indistinguishable from any other unhandled exception until
-        # someone dug through the server's own logs. See
-        # docs/PROJECT_LOG.md.
-        #
-        # WHICH error matters, because the two need different actions: a
-        # rate limit means wait, a rejected key means go and fix the
-        # configuration. Reporting an auth failure as "rate-limited"
-        # would send someone off to check quotas that are perfectly fine.
+        # Every key was skipped. The caller decides whether the failure is
+        # worth waiting out; see `generate_reply`.
+        return "", last_exc, soonest_retry
+
+    def _raise_for(self, last_exc: Exception, waited: float) -> None:
+        """Surface an exhausted rotation as a real, actionable error.
+
+        Rather than falling through to the app's generic 500 handler — a
+        Groq token quota being exhausted was previously indistinguishable
+        from any other unhandled exception until someone dug through the
+        server's own logs. See docs/PROJECT_LOG.md.
+
+        WHICH error matters, because the two need different actions: a
+        rate limit means wait, a rejected key means go and fix the
+        configuration. Reporting an auth failure as "rate-limited" would
+        send someone off to check quotas that are perfectly fine.
+        """
         if isinstance(last_exc, groq.RateLimitError):
+            waited_note = f" after waiting {waited:.1f}s" if waited else ""
             raise RateLimitError(
-                f"All {len(self._clients)} configured Groq API key(s) are rate-limited: {last_exc}"
+                f"All {len(self._clients)} configured Groq API key(s) are "
+                f"rate-limited{waited_note}: {last_exc}"
             ) from last_exc
         raise ServiceUnavailableError(
             f"All {len(self._clients)} configured Groq API key(s) were rejected "

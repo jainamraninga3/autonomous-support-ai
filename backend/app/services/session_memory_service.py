@@ -11,6 +11,17 @@ from app.services.session_context_builder import SessionContextBuilder
 
 logger = get_logger(__name__)
 
+# How many past messages go into the prompt. This is NOT
+# SESSION_MEMORY_MAX_MESSAGES, which is how many Redis KEEPS — the two
+# were the same value once and the read window silently grew from 6 to
+# 20 when session memory landed. `ChatRepository.get_recent_messages`
+# documents why the window is deliberately small: history is there to
+# resolve a follow-up ("where is it located?"), not to answer from, and
+# a long window pollutes retrieval with terms from earlier turns.
+# Redis still stores up to SESSION_MEMORY_MAX_MESSAGES; this only caps
+# what each request reads back.
+_HISTORY_MESSAGES = 6
+
 
 class SessionMemoryService:
     """Manages hot session memory in Redis and falls back to PostgreSQL on cache miss or error."""
@@ -38,7 +49,7 @@ class SessionMemoryService:
         3. On cache MISS or Redis error: fetches history from PostgreSQL,
            rebuilds the Redis cache for subsequent turns, and returns formatted tuples.
         """
-        fetch_limit = limit or self.store.max_messages if self.store else 6
+        fetch_limit = limit or _HISTORY_MESSAGES
 
         if self.enabled and self.store is not None:
             cached_messages = await self.store.get_history(user_id, session_id, limit=fetch_limit)

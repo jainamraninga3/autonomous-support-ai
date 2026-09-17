@@ -1,0 +1,43 @@
+# ONE conversation, run in order, history carried between every turn.
+#
+#   python scripts/chat_test.py -f scripts/chat_test_memory.txt
+#
+# Kept as a single block on purpose: the last three turns say "I told
+# you..." and only mean anything if the earlier turns are still in
+# context. Comment lines do not break the conversation; a BLANK LINE
+# would, so don't add one unless you want a fresh session.
+#
+# The script cannot grade these — read the answers. What each turn is
+# for is noted above it.
+
+# Session memory: expect the name back, route=small_talk.
+My name is Jainam.
+What is my name?
+# New-joiner context + policy. Expect proportional credit from the month of joining.
+I'm a new joiner. How is my Casual Leave credited?
+# Expect prorated EL, visible in HRMS after probation.
+I'm a new joiner. What happens to my Earned Leave?
+# Two-part question. Expect 7 days AND no carry-forward.
+How many Casual Leave days do I get, and can I carry them forward?
+# Expect 7 days, carried forward up to 15.
+Tell me about Sick Leave. Can I carry it forward?
+# Expect a medical certificate from a registered practitioner, via HRMS on recovery.
+If I take three consecutive Sick Leave days, what do I need to provide?
+# Expect NO — EL cannot be post-dated; in advance or same day.
+I'm asking about Earned Leave. Can I apply for it after taking the leave?
+# Expect 14 days, may be taken in parts or one stretch.
+How much Paternity Leave is available, and can I take it in parts?
+# "my" + prior turn. Expect within 6 months of birth or hand-over.
+When can I use my Paternity Leave?
+# Bare follow-up, no subject named. Expect maternity: up to 8 weeks before delivery.
+How much leave can I take before the expected delivery date?
+# Expect encashed on separation, subject to exit criteria; not before probation.
+What happens to my Earned Leave when I leave the company?
+# Recall + policy. Expect visible after successful probation.
+My name is Jainam and I'm a new joiner. When will my Earned Leave become visible in HRMS?
+# Explicit recall of an earlier turn. Expect proportional new-joiner CL, 7 days a year.
+I told you I'm a new joiner. How much Casual Leave should I receive?
+# Pure recall. Expect "Jainam" — not a scope message.
+I have already told you my name. What is it?
+# Recall + policy. Expect: use Casual Leave or Earned Leave.
+I told you I'm asking about Sick Leave. What happens if my Sick Leave is exhausted?

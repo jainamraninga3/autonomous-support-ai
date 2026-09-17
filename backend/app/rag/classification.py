@@ -34,6 +34,12 @@ policies, procedures, etc.). It is not a general-purpose assistant.
 
 Decide which of three routes fits the message below.
 
+ONE OVERRIDE FIRST — it beats all three definitions below. If the message asks about THIS \
+CONVERSATION, the answer is already in it, so the route is SMALL_TALK: the person's own name or \
+anything else they told you here, what they just asked, what you just said. Route it SMALL_TALK \
+however unrelated to the company it looks — someone who introduces themselves and is then told \
+"that is out of scope" is being failed by the router, not helped by it.
+
 RAG_REQUIRED — the message asks about the company, its employees, its workplace, or any \
 policy/procedure/benefit/entitlement/rule an employee might have (leave, holidays, pay, \
 conduct, IT, onboarding, exit, the company's own business and what it does, etc.) — \
@@ -45,8 +51,12 @@ The test is topic (is this about this company or its workplace?), never "could I
 lookup?" — assume you know nothing about THIS company until you check its documents.
 
 SMALL_TALK — the message is conversation, not a question with an answer to look up: a greeting \
-("hi", "good morning"), a thank-you, a goodbye, or a question about the ASSISTANT ITSELF ("who are \
-you?", "what can you do?", "are you a bot?").
+("hi", "good morning"), a thank-you, a goodbye, a question about the ASSISTANT ITSELF ("who are \
+you?", "what can you do?", "are you a bot?"), OR a question about THIS CONVERSATION — the \
+person's own name or anything else they told the assistant a moment ago, what they just asked, \
+what the assistant just said. The answer to those is in the conversation itself, so they are \
+never "out of scope": declining "what is my name" right after someone introduced themselves \
+makes the assistant look broken.
 
 GENERAL — anything that is not about this company or workplace: general knowledge, maths, \
 homework, coding or programming help, geography, current affairs, other companies, translation \
@@ -61,6 +71,8 @@ assistant answers policy content questions (e.g. "what is the code of conduct on
 meta-questions about what documents exist in the knowledge base index or file repository. These \
 are OUT OF SCOPE and get politely declined, so route them here rather than trying to force them \
 into the documents. Be decisive: a maths, coding, or knowledge base inventory request is GENERAL \
+even if framed around work. BUT GENERAL IS ONLY FOR THINGS WITH NO ANSWER HERE — never for a \
+question the conversation above already answers. See the override at the top.
 even if framed around work.
 
 {history_block}Examples:
@@ -70,6 +82,10 @@ even if framed around work.
 "what does our company do?" -> RAG_REQUIRED (about THIS company)
 "who are you?" -> SMALL_TALK (about the assistant)
 "thanks, that helps!" -> SMALL_TALK
+"my name is Jainam" -> SMALL_TALK (the person is introducing themselves)
+"what is my name?" -> SMALL_TALK (answerable from the conversation, NOT out of scope)
+"what did I just ask you?" -> SMALL_TALK (about this conversation)
+"can you repeat that?" -> SMALL_TALK (about this conversation)
 "hi, how many sick leaves do I get?" -> RAG_REQUIRED (the greeting is incidental)
 "is Code of Conduct in this knowledge base?" -> GENERAL (meta-question about knowledge base inventory/index)
 "how many PDF documents are in the knowledge base?" -> GENERAL (meta-question about stored document count)

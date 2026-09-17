@@ -16,6 +16,7 @@ import pytest
 from groq import APIError, RateLimitError as GroqRateLimitError
 
 from app.core.exceptions import RateLimitError, ServiceUnavailableError
+from app.llm import base
 from app.llm.base import GroqLLMClient
 
 
@@ -123,3 +124,68 @@ async def test_non_rate_limit_api_error_raises_immediately_without_trying_other_
 def test_constructor_rejects_empty_key_list() -> None:
     with pytest.raises(ValueError):
         GroqLLMClient(api_keys=[], model="openai/gpt-oss-120b")
+
+
+def _rate_limit_error_with_wait(message: str) -> GroqRateLimitError:
+    """A 429 whose body states how long to wait, the way Groq's does."""
+    return GroqRateLimitError(message, response=_fake_response(429), body=None)
+
+
+@pytest.mark.asyncio
+async def test_waits_out_a_per_minute_limit_instead_of_failing(monkeypatch) -> None:
+    """Groq meters tokens-per-MINUTE and tokens-per-DAY under the same
+    429. A per-minute limit clears in seconds, and failing the user's
+    question over a 4-second wait is absurd — observed live on
+    2026-09-16, mid-run, with `Limit 8000, Used 7956 ... try again in
+    4.4775s`.
+    """
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(base.asyncio, "sleep", _fake_sleep)
+
+    client = _client_with_scripts([
+        [_rate_limit_error_with_wait(
+            "Rate limit reached ... tokens per minute (TPM): Limit 8000, Used 7956, "
+            "Requested 641. Please try again in 4.4775s."
+        ), "recovered"],
+    ])
+
+    assert await client.generate_reply("hello") == "recovered"
+    assert slept, "a 4.5s limit must be waited out, not raised"
+    assert 4.4 < slept[0] < 5.0, slept
+
+
+@pytest.mark.asyncio
+async def test_does_not_wait_out_a_daily_limit(monkeypatch) -> None:
+    """A per-DAY limit says minutes, not seconds. Sleeping on it turns a
+    fast, clear error into a hung request, so it must fail immediately."""
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(base.asyncio, "sleep", _fake_sleep)
+
+    client = _client_with_scripts([
+        [_rate_limit_error_with_wait(
+            "Rate limit reached ... tokens per day (TPD): Limit 200000, Used 199235, "
+            "Requested 1557. Please try again in 5m42.144s."
+        )],
+    ])
+
+    with pytest.raises(RateLimitError):
+        await client.generate_reply("hello")
+    assert slept == [], "a 5-minute wait must not be slept on"
+
+
+def test_retry_after_parses_both_shapes() -> None:
+    assert base._retry_after_seconds(
+        _rate_limit_error_with_wait("Please try again in 4.4775s.")
+    ) == pytest.approx(4.4775)
+    assert base._retry_after_seconds(
+        _rate_limit_error_with_wait("Please try again in 5m42.144s.")
+    ) == pytest.approx(342.144)
+    assert base._retry_after_seconds(_rate_limit_error()) is None
