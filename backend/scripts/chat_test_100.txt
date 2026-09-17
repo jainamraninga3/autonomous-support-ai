@@ -1,0 +1,258 @@
+# 100-question regression set. Each BLANK-LINE-separated block is ONE
+# conversation, run in order with history carried between turns — which is the
+# point: most of these only mean anything in sequence.
+#
+#   python scripts/chat_test.py -f scripts/chat_test_100.txt
+#
+# RUNTIME: ~85s per RAG answer means roughly 2.5 hours, and one Groq key at
+# 8000 TPM will throttle long before that. Run a section at a time: copy one
+# block into its own file, or comment out the rest with #.
+#
+# The expected answer is written above each question as a comment. The script
+# cannot grade these — read them.
+#
+# KNOWN GAPS, so you can tell a real failure from a corpus gap. These are
+# expected to come back as "not covered" or as the out-of-scope refusal:
+#   - working hours, lunch, attendance/lateness  (no Attendance & Punctuality
+#     policy is ingested; only a Darwin leave/attendance USER MANUAL and a
+#     manager shift-assignment guide)
+#   - dress code                                 (not stated in the Code of Conduct)
+#   - joining-document checklist, onboarding steps and duration
+#   - TRAVEL and travel reimbursement (Q28, Q29): the Domestic Travel Policy IS
+#     ingested, but classification routes travel to GENERAL by the 2026-09-08
+#     decision, so these get the out-of-scope refusal. That is the policy
+#     working as configured, not a bug — but it contradicts the expected
+#     answers below.
+
+
+# ===== 1. Basic conversation memory =====================================
+# 7 casual, 7 sick, 21 earned + paternity/maternity/bereavement/special/LWP/
+# sabbatical/election; calendar leave year; applied via HRMS.
+What is the company's leave policy?
+# 7 per year, credited at year start, pro-rated for new joiners, no carry-forward or encashment.
+How many casual leaves can employees take?
+# 90 days from submission; 1 month on probation.
+What is the notice period for resignation?
+# Office-first; remote is an exception approved case by case.
+What is the work-from-home policy?
+# GAP: not in the corpus.
+What are the company's working hours?
+# GAP: Attendance & Punctuality policy is not ingested.
+What is the employee attendance policy?
+# GAP: onboarding flow lives in the Darwin manual.
+How does the onboarding process work?
+# GAP: the checklist is not in the policy set.
+What documents are required during joining?
+# 3 months for bands 2-5; band 1 confirmed on joining; one 3-month extension, max 6.
+What is the company's probation policy?
+# GAP: not stated in the Code of Conduct.
+What is the company's dress code?
+
+# ===== 2. Simple follow-up memory =======================================
+What is the leave policy?
+# 7/year, carries forward to a 15-day cap, excess lapses, certificate for 3+ consecutive days.
+What about sick leave?
+What is the notice period?
+# 90 days; reducible only by organisation waiver; cannot be offset with accumulated leave.
+Can it be reduced?
+What are the working hours?
+# GAP.
+Does that include lunch?
+What is the WFH policy?
+# No fixed quota; approval-based per situation.
+How many days can I work remote?
+What is the probation period?
+# Yes, once by 3 months, max 6 total, with a performance improvement plan.
+Can it be extended?
+What documents are needed for onboarding?
+# GAP: at joining via Darwin/HRMS; exact list not in the docs.
+When are they submitted?
+What is the attendance policy?
+# GAP.
+What if I am late?
+What is the resignation process?
+# Manager discusses and confirms the Last Working Day within one business week, then clearance, handover and F&F.
+What happens after I submit it?
+What is the holiday policy?
+# Fixed public holidays published in HRMS by 1 January, plus 2 optional holidays a year.
+How many holidays do we get?
+# Half-yearly (HY1 Apr-Sep, HY2 Oct-Mar) plus quarterly feedback in Darwinbox; increments announced May/June.
+What is the performance review process and when does it happen?
+
+# ===== 3. Pronoun and reference memory ==================================
+What is the leave policy?
+# 7 casual + 7 sick + 21 earned per year.
+How many can I take?
+What is the notice period?
+# Only if a remote-work arrangement is separately approved; notice rules do not grant WFH.
+Can I serve it from home?
+What is the WFH policy?
+# Reporting Manager for one-off; Review/L2 Manager + HRBP for continued; BU/HR Head beyond 6 months.
+Who approves it?
+What is the onboarding process?
+# GAP: duration not specified.
+How long does it take?
+What is the probation period?
+# A formal HRMS review, then confirmation letter, or extension, or discontinuation.
+What happens after it?
+What is the resignation process?
+# In the HRMS separation tool, after discussing with your manager.
+Where do I submit it?
+# EXPECTED TO BE REFUSED - travel is routed to GENERAL. Ground truth: raised in
+# Darwinbox with Reporting Manager approval; SBU Head if flights exceed Rs 10k.
+What is the travel policy and who approves it?
+# EXPECTED TO BE REFUSED for the same reason. Ground truth: raise the claim in
+# Darwinbox with manager approval, within your band's accommodation limits.
+How do I claim reimbursement?
+# Recommended by your manager, vetted and signed off by the CXO committee; needs an average yearly rating of 4+, effected in the increment cycle.
+What is the promotion process and who decides it?
+
+# ===== 4. Multi-turn context ============================================
+# For personal emergencies; 7 days a year; apply a day in advance.
+Tell me about casual leave.
+# 7 per year.
+How many days can I take?
+# No.
+Can I carry them forward?
+# They lapse at year-end; no encashment.
+What if I don't use them?
+# Yes, casual leave may be clubbed with other applicable leave types.
+Can I combine it with another leave?
+# Discuss with your manager, submit in HRMS, manager confirms LWD within a week.
+Tell me about the resignation process.
+# 90 days from submission.
+How long is the notice period?
+# Only if waived; otherwise recovery notices, or notice pay deducted from F&F.
+Can I leave before completing it?
+# Accumulated Earned Leave encashed at last basic pay in F&F, except termination; excess CL/SL taken is deducted.
+What happens to my remaining leave?
+# Within 90 days of your acceptance of the F&F statement.
+When will I receive the final settlement?
+
+# ===== 5. Context switching =============================================
+What is the leave policy?
+# Office-first; remote is exception-based and manager-approved.
+Now tell me the WFH policy.
+# No fixed count; approval-based.
+How many days remote?
+# 7 per year, carry-forward cap 15.
+Back to leave - what about sick leaves?
+# 7 per year, no carry-forward.
+And casual leave?
+# HRMS submission after a manager discussion.
+Now the resignation process?
+# 90 days.
+What was the notice period we discussed?
+# Reporting Manager one-off; L2 + HRBP for continued.
+Back to WFH - who approves it?
+# 7 a year, carries to a 15-day cap, certificate for 3+ consecutive days.
+What did you say about sick leave?
+# Leave: CL 7, SL 7 (to 15), EL 21. WFH: exception-based, no fixed days. Resignation: HRMS, 90-day notice, F&F within 90 days.
+Summarize everything we discussed.
+
+# ===== 6. Correction memory =============================================
+# 7 a year, personal emergencies, no carry-forward or encashment.
+What is the casual leave policy?
+# Should switch subject to sick leave: 7 a year.
+No, I meant sick leave.
+# 7 per year.
+How many days is it?
+# No fixed continuous cap, but 3+ consecutive days require a medical certificate.
+No - how many continuously?
+# Yes, up to a 15-day accumulation; excess lapses.
+Can I carry it forward?
+# Should switch back to casual leave.
+Forget sick leave - tell me about casual leave.
+# 7 a year, apply a day ahead, no carry-forward or encashment.
+What is the policy for that?
+# A weekly off or holiday within or adjoining the leave is not counted as leave; CL can be clubbed with other leave types.
+Can I combine it with holidays?
+# It will not be approved in HRMS; discuss and reapply.
+What if my manager rejects it?
+# Should recall BOTH the original sick-leave answer and the correction to casual leave.
+Summarize the corrected information.
+
+# ===== 7. That / it / they =============================================
+What is the notice period?
+# Only via organisation waiver; cannot be offset with leave.
+Can I reduce it?
+# Your Reporting Manager accepts the resignation and confirms the LWD within a week.
+Who approves it?
+# No leave during notice except Sick Leave with prior approval (certificate if 3+ days); other leave extends the notice.
+Can I take leave during it?
+# Clearance, handover, relieving documents, then F&F within 90 days.
+What happens after it ends?
+# GAP: checklist not in the docs.
+What documents are required for onboarding?
+# GAP.
+When do I submit them?
+# GAP: onboarding runs through Darwin/HRMS.
+Can I submit them digitally?
+# GAP.
+What if I don't have them?
+# HR, through the background verification (BGV) process.
+Who verifies them?
+
+# ===== 8. Memory and personalization ====================================
+# 7 casual, 7 sick, 21 earned a year, all applied in HRMS.
+Explain the leave policy simply.
+# Mostly office; remote only when your manager approves it for a genuine reason.
+Now the WFH policy the same simple way.
+# CL 7, SL 7, EL 21 per year, via HRMS.
+Make that shorter.
+# Should acknowledge and keep later replies brief.
+Keep your answers short from now on.
+# Tell your manager, submit in HRMS, serve 90 days.
+What is the resignation process?
+# Manager -> HRMS -> 90-day notice -> F&F.
+Same short format please.
+# 90-day notice; no leave except approved SL; F&F in 90 days.
+Only the important points.
+# GAP: runs via Darwin/HRMS at joining.
+What is the onboarding process?
+# Should stay as short as the previous answers.
+As short as before.
+# Leave 7/7/21. WFH exception, manager-approved. Resign HRMS, 90 days, F&F 90 days.
+Summarize the policies in the same format.
+
+# ===== 9. Longer conversation memory ====================================
+What is the leave policy?
+# 7 a year, carry-forward cap 15, certificate for 3+ days.
+What about sick leave?
+# 7 sick leaves per year.
+How many days?
+# Yes, up to 15 days.
+Can I carry them forward?
+# Office-first; remote is exception-based and manager-approved.
+What is the WFH policy?
+# No fixed number; per approved arrangement.
+How many remote days?
+# Reporting Manager; L2 + HRBP for a continued arrangement.
+Who approves it?
+# 90 days.
+What is the notice period?
+# Only approved Sick Leave; other leave extends the notice.
+Can I take leave during notice?
+# Should pull together: 90-day notice, leave-during-notice rule, EL encashment in F&F, clearance and handover, F&F within 90 days, and remote approval if serving notice from home.
+What should I check before resigning?
+
+# ===== 10. Hard memory tests ===========================================
+What is the leave policy?
+# Exception-based, manager-approved, no fixed days.
+What is the WFH policy?
+# 90 days.
+What is the notice period?
+# Should return to LEAVE, not WFH or notice: 7 casual + 7 sick + 21 earned.
+Back to the first topic - how many days?
+# Should resolve to the WFH approval chain: Reporting Manager, then L2 + HRBP.
+The approval I mentioned - who was it?
+# Casual 7: personal emergencies, no carry-forward or encashment. Sick 7: illness only, carries to 15 days, certificate for 3+ days.
+What is the difference between the two leave types?
+# During notice you cannot take leave except approved Sick Leave; anything else extends the notice.
+What was the restriction I referred to?
+# Separate entitlements from separate balances for separate reasons; CL can be clubbed with other leave, but the balances do not merge.
+Can I combine those two?
+# Should repeat the earlier answer WITHOUT drifting: 7/7/21 via HRMS, WFH exception-based, notice 90 days.
+Summarize your earlier answer unchanged.
+# Should recall leave, WFH approval and notice period, the sick-to-casual correction, and the request for short answers.
+What have you remembered about me?

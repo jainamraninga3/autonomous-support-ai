@@ -11,6 +11,7 @@ of `rag_chat_test` runs failing with generic `internal_error` 500s — a
 Groq daily token quota being exhausted (`groq.RateLimitError`).
 """
 
+import groq
 import httpx
 import pytest
 from groq import APIError, RateLimitError as GroqRateLimitError
@@ -189,3 +190,47 @@ def test_retry_after_parses_both_shapes() -> None:
         _rate_limit_error_with_wait("Please try again in 5m42.144s.")
     ) == pytest.approx(342.144)
     assert base._retry_after_seconds(_rate_limit_error()) is None
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_is_retried_not_raised(monkeypatch) -> None:
+    """A timeout says nothing about the request or the key — the same call
+    may succeed a moment later. Observed 2026-09-17: a 45-turn regression
+    run died at turn 45 on `Groq API error: Request timed out.`, because
+    timeouts fell into the generic APIError branch whose reasoning ("a
+    property of the REQUEST, another key would not help") is right for a
+    bad model name and wrong for this.
+    """
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(base.asyncio, "sleep", _fake_sleep)
+
+    timeout = groq.APITimeoutError(
+        request=httpx.Request("POST", "https://api.groq.com/openai/v1/chat/completions")
+    )
+    client = _client_with_scripts([[timeout, "recovered"]])
+
+    assert await client.generate_reply("hello") == "recovered"
+    assert slept, "a timeout must be waited out and retried"
+
+
+@pytest.mark.asyncio
+async def test_a_bad_request_is_still_raised_immediately(monkeypatch) -> None:
+    """The retry must NOT swallow genuine request errors. A bad model name
+    fails identically on every key, so cycling just multiplies latency."""
+    slept: list[float] = []
+
+    async def _fake_sleep(seconds: float) -> None:
+        slept.append(seconds)
+
+    monkeypatch.setattr(base.asyncio, "sleep", _fake_sleep)
+
+    bad = APIError("model not found", request=httpx.Request("POST", "https://api.groq.com/x"), body=None)
+    client = _client_with_scripts([[bad, "never reached"]])
+
+    with pytest.raises(ServiceUnavailableError):
+        await client.generate_reply("hello")
+    assert slept == []

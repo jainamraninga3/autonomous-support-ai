@@ -60,9 +60,27 @@ Answer it anyway, from your general knowledge, and answer it PROPERLY. A vague n
 knows you could not find their document, so give them something genuinely useful about how this \
 normally works.
 
+SHAPE AND LENGTH — the same shape a retrieved answer uses, because the reader cannot tell \
+why one path produced four lines and another produced a page. Use these exact headings:
+
+### Summary
+One sentence answering the question directly.
+
+### Explanation
+AT MOST 6 short bullets. ONE level — NEVER nest a bullet under a bullet.
+
+UNDER 120 WORDS in total. This is the rule most often broken on this path: a \
+general-knowledge answer has no context to run out of, so it sprawls. Observed 2026-09-17: \
+answers of 385, 429, 434 and 479 words with up to 19 nested bullets, for the same reader who \
+gets 60-120 words and zero nesting from the retrieved path. Pick the handful of points that \
+actually matter and stop.
+
 How to answer:
 - Give a real, substantive explanation: the common structure, the typical figures and ranges, the \
-usual conditions and process. Be concrete and specific enough to be useful.
+usual conditions and process. Be concrete and specific enough to be useful WITHIN that budget \
+— short does not mean vague. Three concrete bullets beat twelve hedged ones.
+- Do NOT enumerate every variant you can think of. One typical range per point, not a tour \
+of every country's practice.
 - Use bullets and short paragraphs. Plain Markdown only, never HTML (no <br>, no <b>) — a renderer \
 that refuses raw HTML shows those tags literally. Use "-" for bullets.
 - End with one line telling them to confirm the specifics with HR or the policy handbook, because \

@@ -44,14 +44,19 @@ sense).
 **Phase:** V1 RAG pipeline complete and live-verified end to end
 (ingestion, embedding, hybrid search, reranking, grounded generation
 with citations, query classification, query rewriting, answer
-verification, a scoped general-knowledge fallback, and an off-topic
-refusal boundary) — see "Explicitly NOT implemented yet" below for
+verification with a bounded regenerate loop, a scoped general-knowledge
+fallback, an off-topic refusal boundary, and Redis-backed session memory
+in front of PostgreSQL) — see "Explicitly NOT implemented yet" below for
 what's deliberately still missing.
 
 **Also live as of 2026-09-03:** a **Next.js 15 frontend**
 (`frontend/`, 60% chat / 40% live console log, with reset and restart
 buttons) — see its Change Log entry; **conversation history** (the last
-6 turns feed `classify` and `rewrite`, so follow-up questions resolve);
+6 turns feed `classify` and `rewrite`, so follow-up questions resolve —
+and since 2026-09-16 also `small_talk` and the GROUNDED ANSWER itself, so
+"what is my name" and "I'm a new joiner, how is my CL credited?" both
+work; the answer prompt is explicit that history is context only and can
+never supply or override a policy fact);
 and the **off-topic boundary restored** after being briefly removed —
 maths, coding, and general-knowledge questions get a fixed polite
 decline with NO LLM call, because this is a company policy assistant and
@@ -89,16 +94,27 @@ was done.
 - LLM: abstraction exists (`backend/app/llm/base.py`). `GroqLLMClient`
   now supports MULTIPLE keys (`GROQ_API_KEY` tried first, then
   `GROQ_API_1`/`_2`/`_3` in order) with automatic fallback to the next
-  key on a rate limit (`groq.RateLimitError` -> retry next key; a
-  non-rate-limit `groq.APIError` -> `ServiceUnavailableError` 503
-  immediately, no key-cycling) — added 2026-08-26 after a real Groq
+  key on a rate limit (`groq.RateLimitError` -> retry next key;
+  `AuthenticationError`/`PermissionDeniedError` ALSO cycle, added
+  2026-09-08 — a rejected key says nothing about the others; any other
+  `groq.APIError` -> `ServiceUnavailableError` 503 immediately, since
+  that is a property of the REQUEST and another key would fail
+  identically). Since 2026-09-16, when EVERY key is rate-limited the
+  client reads the stated retry-after and, if it is <= 20s, sleeps and
+  retries the whole rotation (45s total budget): a tokens-per-MINUTE
+  limit clears in seconds and must not fail the request, a
+  tokens-per-DAY limit says minutes and must not be slept on — added 2026-08-26 after a real Groq
   daily-token-quota exhaustion was diagnosed as the root cause of
   `rag_chat_test` 500s (see Change Log). `StubLLMClient` (echoes input)
   remains the automatic fallback only when NO Groq key at all is
   configured. **Verified live 2026-08-25** (single key) — real Groq
-  reply, persisted correctly to Postgres. Multi-key fallback itself is
-  unit-tested (6 cases) but NOT yet exercised against a real rate limit
-  in production use.
+  reply, persisted correctly to Postgres. Multi-key fallback is
+  unit-tested (9 cases) and, as of 2026-09-16/17, HAS been exercised
+  against real rate limits in normal use — both a tokens-per-day
+  exhaustion across four keys and a tokens-per-minute limit mid-run.
+  Note from those logs: four configured keys were not four quotas, since
+  two belonged to the same organization and shared a counter. Groq meters
+  per MODEL as well as per organization.
 
 **Working endpoints:**
 - `GET /health` — reports app status + PostgreSQL + Weaviate connectivity
@@ -457,15 +473,20 @@ parent-child retrieval, metadata filtering (ACL/tenant — the `filters`
 param exists on `hybrid_search()` but nothing populates tenant/ACL
 properties yet), full background-ingestion
 job tracking (`upload_jobs` is still schema-only — upload/ingest are
-synchronous HTTP calls for now, not a background job queue), a
-regenerate loop on a failed verification (current behavior: refuse, not
-retry — plan.md's diagram allows either), evaluation, tracing/metrics,
-rate limiting, auth/authz, tenant isolation, MCP, CrewAI, DSPy, Redis.
+synchronous HTTP calls for now, not a background job queue),
+evaluation, tracing/metrics,
+rate limiting, auth/authz, tenant isolation, MCP, CrewAI, DSPy.
+(Redis shipped 2026-09-13 and the regenerate-on-failed-verification loop
+shipped 2026-09-08 — both were in this list until 2026-09-17, which is
+exactly the drift this section exists to prevent.)
 (PDF ingestion, chunking, document dedup/versioning, BGE-M3 embeddings,
 hybrid search, reranking, context construction, grounded answer
-generation with citations, query classification, query rewriting, AND
-answer verification ARE now implemented — see the entries above and the
-Change Log. OCR was implemented on 2026-08-25 and then fully removed on
+generation with citations, query classification, query rewriting,
+answer verification, REDIS HOT SESSION MEMORY (2026-09-13, PostgreSQL
+remains the source of truth), and a REGENERATE LOOP on failed
+verification (2026-09-08, bounded at 2 attempts, the verifier's
+objection fed back so the model is told which claim to drop) ARE now
+implemented — see the entries above and the Change Log. OCR was implemented on 2026-08-25 and then fully removed on
 2026-08-26 at the user's request — see both entries; scanned/image-based
 PDFs are simply not supported.)
 
@@ -518,6 +539,135 @@ stays on its default ports (8080, 50051) — no conflict was found there.
 ---
 
 ## Change Log (newest first)
+
+### 2026-09-17 (later) — A timeout killed a 45-turn run; the fallback ignored every shape rule
+
+**Why:** The 100-question set was run for the first time. It died at turn 45
+on `503 Groq API error: Request timed out.` and, before that, exposed that the
+general-knowledge path answers in a completely different shape from the
+retrieved path.
+
+- `app/llm/base.py`: `groq.APITimeoutError` / `APIConnectionError` /
+  `InternalServerError` are now retried, not raised. They had been falling
+  into the generic `APIError` branch, whose reasoning — "a property of the
+  REQUEST, so another key would not help" — is correct for a bad model name
+  and simply wrong for a timeout, which says nothing about the request or the
+  key and may well succeed a moment later. They carry no retry-after, so they
+  get a fixed `_TRANSIENT_RETRY_SECONDS = 2.0` backoff inside the existing 45s
+  budget. A genuine bad-request error still raises immediately.
+- `tests/unit/test_llm_base.py`: two tests — a timeout is waited out and the
+  call succeeds, and a bad request still raises WITHOUT sleeping (the retry
+  must not swallow real errors). Sabotage-verified. Suite: 127 passed.
+- `app/rag/generation/general_answer.py`: the fallback prompt had NO length or
+  shape rules at all. Measured in the same run: 385, 429, 434 and 479 words
+  with up to 19 NESTED bullets, for the same reader who gets 60-120 words and
+  zero nesting from the retrieved path. It now uses the same
+  `### Summary` / `### Explanation` shape, at most 6 bullets, one level, under
+  120 words.
+
+**Correction to the 2026-09-17 entry above.** That entry claimed working hours
+and attendance were not in the corpus. They ARE. The run answered "What are
+the working hours?" with real shift timings from
+`Amnex_Manager_Assign_Shift_Time__amp__Weekly_Off.pdf` — and answered the SAME
+question with "the policy does not state the specific working hours" in a
+different conversation. That is not a corpus gap, it is unstable,
+history-dependent retrieval, and `chat_test_100.txt`'s gap list is wrong for
+those two.
+
+**Two defects found and NOT fixed — same root cause, and the fix is a design
+decision:**
+
+1. A PRONOUN AFTER A FALLBACK ANSWER ATTACHES TO THE WRONG SUBJECT, and says so
+   confidently. "How long does it take?" after an onboarding fallback answered
+   about reimbursement claims (7-10 days). "When are they submitted?" after the
+   joining-documents fallback answered about insurance claims within 7 days of
+   discharge. "Does that include lunch?" after working hours answered about the
+   Rs 300/day meal reimbursement. All three returned `verified=True`. The
+   mechanism: the preceding turn was a `general_fallback` with no citations and
+   no retrieved subject, so `rewrite_query` has no antecedent to resolve
+   against and retrieval matches whatever the bare pronoun sentence happens to
+   hit. Answering a DIFFERENT question confidently is worse than refusing.
+
+2. THE VERIFIER IS REJECTING CORRECT ANSWERS INTO WORSE ONES. "What is the
+   attendance policy?" was rejected for "incorrectly states that the documents
+   do not detail other attendance rules" — punished for being appropriately
+   cautious — and replaced by a 479-word internet answer. "How many holidays do
+   we get?" was rejected one turn after the holiday question had answered
+   correctly from the same material.
+
+Both trace back to retrieval precision. The cheapest next measurement is still
+the stale rerank A/B: `RERANK_ENABLED=False` was decided when
+`CHUNK_SIZE_TOKENS` was 100, and it is now 500.
+
+### 2026-09-17 — 100-question regression set; corpus audit; two findings
+
+**Why:** The user supplied 100 question/answer pairs to "train the bot from".
+There is no training step in a RAG system — nothing here learns from an answer
+— so they were turned into a regression TEST set instead, which is the more
+useful artefact: it says where the bot is wrong.
+
+- `backend/scripts/chat_test_100.txt`: new. The 100 questions as 10
+  conversations (114 turns — the follow-ups need setup turns), history carried
+  within each, the expected answer written above each question as a comment.
+  Runs with `chat_test.py -f`. At ~85s per RAG answer it is ~2.7 hours end to
+  end and one Groq key at 8000 TPM will throttle first, so each `# =====`
+  section is self-contained and meant to be run alone. Sections 5, 6 and 10
+  (context switching, correction, "back to the first topic") are the ones that
+  actually stress memory.
+
+**Corpus audit — 30 documents, 128 chunks.** Cross-checking the 100 questions
+against what is actually ingested found real gaps, and they are marked in the
+file so a corpus gap is not mistaken for a bug:
+
+- There is NO Attendance & Punctuality policy. What exists is a Darwin
+  leave/attendance USER MANUAL and a manager shift-assignment guide. So working
+  hours, lunch and lateness cannot be answered, matching the user's own "not
+  specified" notes. Dress code and the joining-document checklist are likewise
+  absent. Those questions SHOULD return "the documents do not cover this"; a
+  confident answer to any of them is a hallucination and a real failure.
+
+**Finding 1 — the travel decision now contradicts the test set.** The Domestic
+Travel Policy IS ingested (4 chunks), but `classification.py` routes every
+travel question to GENERAL by the explicit 2026-09-08 product decision, so it
+is unreachable: the fixed refusal, no retrieval. Two of the user's questions
+(travel approval, travel reimbursement) have expected answers drawn from that
+document. Either the routing rule goes or those two are permanently
+unanswerable. Surfaced and left to the user — it is their decision, not a bug.
+
+**Finding 2 — retrieval precision is the weak link, not generation.** In the
+16-turn memory run, "I'm a new joiner. How is my Casual Leave credited?" cited
+`Relocation_policy_for_new_joiners.pdf` and the Separation Policy. Neither says
+anything about crediting casual leave: the phrase "new joiner" is BM25-matching
+the relocation-for-new-joiners document, so the user's own CONTEXT phrase
+hijacks retrieval. Same pattern on the paternity question, which cited a group
+health insurance PPT. With `RERANK_TOP_K=5` that is 2 of 5 slots wasted. The
+answers were still right because the Leave_Policy chunks made the cut — that is
+margin, and a harder question will not have it.
+
+Worth acting on: `RERANK_ENABLED=False` was set from an A/B run when
+`CHUNK_SIZE_TOKENS` was **100**. It is now **500**. That conclusion is stale,
+and this is precisely the failure reranking exists to fix.
+
+**Grounding spot-check — both suspicions were wrong, which is worth recording.**
+Two answers looked like possible hallucinations and both are verbatim in the
+corpus:
+
+- "notify HR and the Reporting Manager at least 8 weeks before the expected due
+  date" — Maternity Benefit Policy, exactly.
+- "except in cases of termination (including death case)" — Separation Policy,
+  exactly. The odd-looking "(including death)" is the document's own wording.
+
+**16-turn memory run, on the rebuilt image:** 16/16 answered, no 429, memory
+correct on all four recall turns ("what is my name" twice, "I told you I'm a
+new joiner", "I told you I'm asking about Sick Leave"), shape correct
+throughout (48-103 words, 3-4 bullets, zero nesting), `verified=True` on every
+RAG answer. Latency 28-137s, ~85s mean. One small-talk turn took 19.6s, which
+is the new retry logic sleeping out a TPM limit — working as designed, and a
+symptom of running on a single key.
+
+**Open, in priority order:** (1) latency and quota — 5-6 LLM calls per question
+drive both; (2) the travel routing decision above; (3) re-run `rag_chat_test`
+to settle the stale rerank A/B at the new chunk size.
 
 ### 2026-09-16 — A 4-second rate limit was failing the request
 
@@ -735,6 +885,41 @@ Suite: 121 passed.
   rather than on behaviour, so the ownership predicate cannot quietly go
   missing again. Sabotage-verified: restoring the old `WHERE id = ...`
   fails exactly 2 of the 4. Suite: 121 passed.
+
+### 2026-09-08 — Regenerate loop on a failed verification (written up 2026-09-17)
+
+**Logged late.** The code shipped on 2026-09-08 as part of the
+retrieval-failure work, but it never got its own Change Log entry, and
+the Current State section went on listing it under "Explicitly NOT
+implemented yet" for nine days. Recorded now so the two agree.
+
+**Why:** Before this, an UNSUPPORTED verdict from the verifier threw the
+whole answer away and fell through to the disclosed general-knowledge
+fallback. That is a bad trade when the answer was mostly right. Observed
+on 2026-09-08: a leave-policy answer built from 10 real, correctly
+retrieved chunks was discarded in full over a single invented figure
+("26 weeks paid maternity leave"), and the user was handed a
+general-knowledge reply with NO citations instead — strictly worse than
+the draft it replaced, nine-tenths of which was properly grounded.
+
+- `app/graph/workflow.py`: `_route_after_verify` now returns `"generate"`
+  while `generation_attempts < _MAX_GENERATION_ATTEMPTS` (= 2: one
+  original attempt plus one correction pass), and only falls through to
+  `general_fallback` after that. The bound is the point — an unbounded
+  cycle in a `StateGraph` is an infinite loop, and a model that invented
+  a figure once will happily invent it again.
+- `app/rag/generation/answer_generator.py`: the retry is not blind. The
+  verifier's objection is appended to the prompt via `_CORRECTION_SUFFIX`,
+  which says REMOVE the unsupported claim — do not rephrase it, do not
+  hedge it, do not soften it with "typically". Rephrasing was the
+  observed failure mode: a hedged version of an invented figure is still
+  an invented figure.
+- `generate_node` passes the objection only on a retry, so the base
+  prompt is byte-identical on the first attempt and this is provably a
+  no-op when nothing was objected to.
+
+plan.md's diagram permits either refuse or retry; this picks retry, then
+refuses.
 
 ### 2026-09-11..16 — Answer length: brief by default, detailed on request
 

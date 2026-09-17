@@ -24,6 +24,8 @@ logger = get_logger(__name__)
 # error into a hung request. The retry-after value is what separates
 # them, so the wait itself decides whether to wait.
 _MAX_RETRY_WAIT_SECONDS = 20.0
+# Timeouts and 5xx carry no retry-after, so they get a fixed short backoff.
+_TRANSIENT_RETRY_SECONDS = 2.0
 _MAX_TOTAL_WAIT_SECONDS = 45.0
 
 # "Please try again in 4.4775s" / "in 5m42.144s"
@@ -110,8 +112,13 @@ class GroqLLMClient(LLMClient):
             # Every key refused. A per-MINUTE limit says "4.5s" and is
             # worth sleeping through; a per-DAY limit says "5m42s" and is
             # not. Anything without a stated wait is not slept on either.
+            retryable = isinstance(
+                last_exc,
+                (groq.RateLimitError, groq.APITimeoutError,
+                 groq.APIConnectionError, groq.InternalServerError),
+            )
             if (
-                isinstance(last_exc, groq.RateLimitError)
+                retryable
                 and retry_after is not None
                 and retry_after <= _MAX_RETRY_WAIT_SECONDS
                 and waited + retry_after <= _MAX_TOTAL_WAIT_SECONDS
@@ -188,9 +195,30 @@ class GroqLLMClient(LLMClient):
                 )
                 last_exc = exc
                 continue
+            except (groq.APITimeoutError, groq.APIConnectionError, groq.InternalServerError) as exc:
+                # TRANSIENT. A timeout, a dropped connection or a 5xx says
+                # nothing about the request or the key — the same call may
+                # well succeed a moment later, so it is retried like a rate
+                # limit rather than failing the user's question.
+                #
+                # Observed 2026-09-17: a 45-turn regression run died at turn
+                # 45 on `Groq API error: Request timed out.` These fell into
+                # the generic `APIError` branch below, whose reasoning ("a
+                # property of the REQUEST, another key would not help") is
+                # correct for a bad model name and simply wrong for a
+                # timeout. No stated retry-after exists for these, so
+                # `_TRANSIENT_RETRY_SECONDS` is used instead.
+                logger.warning(
+                    "Groq key #%d hit a transient failure (%s) for model=%s, trying next key: %s",
+                    index, type(exc).__name__, self.model, exc,
+                )
+                last_exc = exc
+                if soonest_retry is None or _TRANSIENT_RETRY_SECONDS < soonest_retry:
+                    soonest_retry = _TRANSIENT_RETRY_SECONDS
+                continue
             except groq.APIError as exc:
                 # Everything else — a bad model name, a malformed
-                # request, a server-side fault. These are properties of
+                # request. These are properties of
                 # the REQUEST, not of the key, so another key genuinely
                 # would not help and trying the rest just multiplies the
                 # latency of a guaranteed failure.
