@@ -251,9 +251,19 @@ OCR, so an image-based PDF ingests as zero chunks — in any language.
 
 ## API reference
 
+**Everything except `/health` and `/api/v1/logs/tail` now requires a
+login.** Send `Authorization: Bearer <token>` from
+`POST /api/v1/auth/login`. Two accounts are seeded at startup:
+`admin`/`admin123` (admin — can reset, restart, and manage documents) and
+`demo`/`demo123` (plain user — chat only).
+
 | method | path | purpose |
 | --- | --- | --- |
-| `GET` | `/health` | app + PostgreSQL + Weaviate connectivity |
+| `GET` | `/health` | app + PostgreSQL + Weaviate connectivity (ungated) |
+| `POST` | `/api/v1/auth/signup` | create a `role="user"` account; returns a token |
+| `POST` | `/api/v1/auth/login` | returns `{token, user}` |
+| `POST` | `/api/v1/auth/logout` | end the session |
+| `GET` | `/api/v1/auth/me` | who the current token belongs to |
 | `POST` | `/api/v1/chat` | the full workflow; persists the conversation. Optional `limit`/`alpha`/`rerank`/`top_k` override retrieval per request |
 | `POST` | `/api/v1/documents/upload` | extract + chunk + store (no embedding) |
 | `POST` | `/api/v1/documents/{id}/ingest` | embed into Weaviate (`?force=true` to re-embed) |
@@ -264,9 +274,10 @@ OCR, so an image-based PDF ingests as zero chunks — in any language.
 | `POST` | `/api/v1/admin/reset/vector-store` | drop and recreate the Weaviate collection |
 | `POST` | `/api/v1/admin/reset/all` | both |
 
-The admin reset endpoints are destructive and **unauthenticated** — this
-project has no auth yet. Dev convenience only; never expose that router
-where real users can reach it.
+The admin reset endpoints are destructive and **admin-only** as of
+2026-09-18 (they were unauthenticated before that). Still dev
+convenience: an admin wipes everything with one call, with no
+confirmation and no undo.
 
 Full request/response detail, including every field on the chat response,
 is in [backend/README.md](backend/README.md) and in Swagger.
@@ -293,7 +304,7 @@ autonomous-support-ai/
     ├── migrations/             Alembic; env.py takes the DB URL from app config
     │   └── versions/
     ├── scripts/                CLI entry points (ask, search, ingest, embed)
-    ├── tests/unit/             96 tests, no DB/network/model needed
+    ├── tests/unit/             159 tests, no DB/network/model needed
     ├── rag_chat_test/          evaluation harness (talks to the live API over HTTP)
     │   ├── input/questions.json
     │   ├── main_script/        test_runner.py, config.py
@@ -475,8 +486,8 @@ which is what the dual-language retrieval pass compensates for.
 
 ## Tests and the evaluation harness
 
-**Unit tests** — 97, no database, network, or model needed. Weaviate,
-Postgres, the LLM, and both ML models are faked.
+**Unit tests** — 159, no database, network, or model needed. Weaviate,
+Postgres, Redis, the LLM, and both ML models are faked.
 
 ```powershell
 docker compose exec backend pytest    # in the container
@@ -573,27 +584,44 @@ classification, rewriting, verification, the disclosed general-knowledge
 fallback, the off-topic refusal boundary, small talk, and multilingual
 Q&A across five languages plus Hinglish.
 
+**Also live** (this list was stale for weeks — each of these was sitting
+under "not implemented" below while already shipped, which is exactly what
+`docs/PROJECT_LOG.md` exists to prevent):
+
+- a **Next.js frontend** (`frontend/`) — 60% chat / 40% live backend log
+- **Redis** hot session memory in front of PostgreSQL, with automatic
+  fallback to PostgreSQL when it is unavailable
+- **conversation history** — the last 6 turns feed classification,
+  rewriting, small talk, and the grounded answer itself, so follow-ups
+  resolve their own subject
+- a **regenerate loop** on failed verification — bounded at 2 attempts,
+  with the verifier's objection fed back so the model is told which claim
+  to drop
+- **authentication** (2026-09-18) — login/signup, bcrypt, roles
+
 **Not implemented yet:**
 
 - OCR — scanned PDFs yield zero chunks
 - table extraction, header/footer detection, contextual chunking,
   parent-child retrieval
-- metadata filtering (ACL / tenant), tenant isolation, auth/authz
-- conversation-history-aware retrieval — history *is* persisted, but the
-  graph only ever sees the current message, so every turn is stateless
-  and a follow-up like "and what about earned leave?" has no antecedent
+- metadata filtering (ACL / tenant), tenant isolation. Auth answers "who
+  is this", not "what may they see" — every logged-in user still
+  retrieves from every ingested document
+- rate limiting (including on `/auth/login` — password guesses are
+  unlimited), password reset, any account management
 - background ingestion job tracking (the `upload_jobs` table is schema
   only)
-- a regenerate loop when verification fails (today the answer is simply
-  discarded)
 - a `/rechunk` endpoint
-- rate limiting, tracing/metrics
-- MCP, CrewAI, DSPy, frontend, Redis
+- tracing/metrics
+- MCP, CrewAI, DSPy
 
-**Known rough edges:** no timeout on the Groq call, so a network hang
-blocks indefinitely; pypdf turns curly apostrophes and bullets into
+**Known rough edges:** pypdf turns curly apostrophes and bullets into
 U+FFFD in stored chunk text (cosmetic for retrieval, but it reaches the
-LLM's context); Weaviate's `fusion_type` is left at the server default.
+LLM's context); Weaviate's `fusion_type` is left at the server default;
+`/api/v1/logs/tail` is deliberately unauthenticated and serves raw log
+lines containing users' questions. The Groq call no longer hangs
+indefinitely — timeouts, connection errors and 5xx are retried within a
+45s budget (2026-09-17).
 
 [docs/PROJECT_LOG.md](docs/PROJECT_LOG.md) is the authoritative record of
 project state and every change, including what has and hasn't been

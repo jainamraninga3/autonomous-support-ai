@@ -1,17 +1,25 @@
-"""Destructive data-reset routes for local development/testing.
+"""Destructive data-reset routes.
 
-Not gated behind auth or an environment check — this project has none
-yet (see `docs/PROJECT_LOG.md`). Treat these as dev-only until that
-changes; don't expose this router in a deployment that has real users.
+**ADMIN ONLY as of 2026-09-18** — every route here requires
+`role == "admin"` (`require_admin`). Before that they were completely
+unauthenticated, which meant an unauthenticated POST could wipe every
+document and chat, or SIGTERM the process.
+
+Still dev-oriented: an admin can destroy all data with one call and there
+is no confirmation, no audit trail, and no undo. The router-level
+dependency is the boundary now, not the absence of a UI button.
 """
 
 from fastapi import APIRouter, Depends
 
-from app.api.dependencies import get_admin_service
+from app.api.dependencies import get_admin_service, require_admin
 from app.schemas.admin import ResetResponse, RestartResponse
 from app.services.admin_service import AdminService
 
-router = APIRouter(prefix="/admin", tags=["admin"])
+# Declared on the ROUTER, not per-route: a new destructive endpoint added
+# here is then gated by default, instead of being unprotected until someone
+# remembers to add the dependency.
+router = APIRouter(prefix="/admin", tags=["admin"], dependencies=[Depends(require_admin)])
 
 
 @router.post("/reset/postgres", response_model=ResetResponse)

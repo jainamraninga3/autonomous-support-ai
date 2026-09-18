@@ -77,6 +77,17 @@ class Settings(BaseSettings):
     GROQ_API_3: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-120b"
 
+    # --- Auth sessions ---
+    # Login sessions are stored in PostgreSQL (a `user_sessions` table), not
+    # Redis: Redis here is a best-effort cache that has already been observed
+    # to come up disconnected on a container-startup race (see
+    # docs/PROJECT_LOG.md), and a login system silently logging everyone out
+    # whenever that happens would be a worse failure mode than one extra
+    # table. A token's expiry is extended ("touched") on each authenticated
+    # request, so an active user stays logged in past this window; an idle
+    # one does not.
+    AUTH_SESSION_TTL_SECONDS: int = 86400  # 24 hours
+
     @property
     def cors_allow_origins(self) -> list[str]:
         """Parsed `CORS_ALLOW_ORIGINS`. `["*"]` allows any origin."""

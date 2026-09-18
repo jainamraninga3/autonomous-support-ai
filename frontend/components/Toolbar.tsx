@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { API_BASE_URL } from "@/lib/api";
-import type { HealthResponse } from "@/lib/types";
+import type { HealthResponse, User } from "@/lib/types";
 
 export interface PendingAction {
   key: string;
@@ -29,24 +29,40 @@ export function Toolbar({
   health,
   backendReachable,
   busy,
+  user,
   onRefreshChat,
   onResetPostgres,
   onResetVectorStore,
   onResetAll,
   onRestart,
   onCheckHealth,
+  onLogin,
+  onSignup,
+  onLogout,
 }: {
   health: HealthResponse | null;
   backendReachable: boolean | null;
   busy: string | null;
+  /** null = logged out. Drives both the auth area and who sees the
+   *  destructive buttons. */
+  user: User | null;
   onRefreshChat: () => void;
   onResetPostgres: () => Promise<void>;
   onResetVectorStore: () => Promise<void>;
   onResetAll: () => Promise<void>;
   onRestart: () => Promise<void>;
   onCheckHealth: () => void;
+  onLogin: () => void;
+  onSignup: () => void;
+  onLogout: () => void;
 }) {
   const [pending, setPending] = useState<PendingAction | null>(null);
+
+  // Admin-only. This is presentation, NOT the security boundary — the
+  // backend requires `role == "admin"` on every one of these routes
+  // (`require_admin`), so hiding the buttons only spares a plain user a
+  // guaranteed 403.
+  const isAdmin = user?.role === "admin";
 
   // Every one of these is irreversible, so none of them fire on a single
   // click — they go through the confirm dialog below.
@@ -122,17 +138,48 @@ export function Toolbar({
           <button onClick={onRefreshChat} className="btn-ghost" disabled={!!busy}>
             ↺ New chat
           </button>
+
+          {isAdmin && (
+            <>
+              <span className="mx-1 h-5 w-px bg-white/10" />
+              {dangerous.map((action) => (
+                <button
+                  key={action.key}
+                  onClick={() => setPending(action)}
+                  disabled={!!busy}
+                  className={action.key === "restart" ? "btn-warn" : "btn-danger"}
+                >
+                  {busy === action.key ? "working…" : action.label}
+                </button>
+              ))}
+            </>
+          )}
+
           <span className="mx-1 h-5 w-px bg-white/10" />
-          {dangerous.map((action) => (
-            <button
-              key={action.key}
-              onClick={() => setPending(action)}
-              disabled={!!busy}
-              className={action.key === "restart" ? "btn-warn" : "btn-danger"}
-            >
-              {busy === action.key ? "working…" : action.label}
-            </button>
-          ))}
+          {user ? (
+            <>
+              <span className="flex items-center gap-1.5 px-1 text-xs text-slate-300">
+                {user.full_name}
+                {isAdmin && (
+                  <span className="badge border-indigo-400/30 bg-indigo-500/15 text-indigo-200">
+                    admin
+                  </span>
+                )}
+              </span>
+              <button onClick={onLogout} className="btn-ghost" disabled={!!busy}>
+                Log out
+              </button>
+            </>
+          ) : (
+            <>
+              <button onClick={onLogin} className="btn-primary">
+                Log in
+              </button>
+              <button onClick={onSignup} className="btn-ghost">
+                Sign up
+              </button>
+            </>
+          )}
         </div>
       </header>
 

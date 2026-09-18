@@ -180,7 +180,7 @@ or locally, with the virtualenv active:
 pytest
 ```
 
-97 tests, no database or network required — Weaviate, Postgres, the LLM,
+159 tests, no database or network required — Weaviate, Postgres, Redis, the LLM,
 and the embedding/reranking models are all faked.
 
 ## Ingest a PDF
@@ -434,10 +434,68 @@ START -> classify -> GENERAL     -> refuse (out of scope, no LLM call) -> END
 `POST /api/v1/chat` now runs this graph (see Endpoints below) instead of
 calling the LLM directly.
 
+## Authentication
+
+**Every route below except `/health` and `/api/v1/logs/tail` requires a
+logged-in caller as of 2026-09-18.** Send the token from
+`POST /api/v1/auth/login` as `Authorization: Bearer <token>`.
+
+Two accounts are seeded automatically at startup (idempotent — an existing
+username is never overwritten, so changing a password sticks):
+
+| username | password | role | can do |
+| --- | --- | --- | --- |
+| `admin` | `admin123` | admin | everything, including `/admin/*` and `/documents/*` |
+| `demo` | `demo123` | user | chat only |
+
+```bash
+TOKEN=$(curl -s -X POST http://localhost:8000/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"username":"admin","password":"admin123"}' | python -c 'import sys,json;print(json.load(sys.stdin)["token"])')
+
+curl -s -X POST http://localhost:8000/api/v1/chat \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"message":"How many sick leaves do I get?"}'
+```
+
+- `POST /api/v1/auth/signup` — public. Always creates a `role="user"`
+  account (there is no role field on the request, so this endpoint cannot
+  mint an admin) and returns a token, so signup logs you straight in.
+- `POST /api/v1/auth/login` — returns `{token, user}`.
+- `POST /api/v1/auth/logout` — deletes the session row. Succeeds even
+  without a valid token; a client clearing its own token should never be
+  blocked by the server disagreeing.
+- `GET /api/v1/auth/me` — who the current token belongs to. A 401 means
+  "logged out", which is a normal state.
+
+Sessions are rows in `user_sessions` (PostgreSQL), **not** Redis — Redis
+in this stack has been observed coming up disconnected on a
+container-startup race with no reconnect, and losing every login to that
+would be worse than one extra table. Expiry is
+`AUTH_SESSION_TTL_SECONDS` (24h) and **slides forward on every
+authenticated request**, so it is an inactivity timeout, not an absolute
+one. Passwords are bcrypt-hashed.
+
+`ChatRequest.user_id` is now **ignored** — the route overwrites it with the
+authenticated user's id. Session ownership is enforced in SQL against that
+value, so honouring a client-supplied one would let anyone read anyone
+else's conversation.
+
+**The CLI tools authenticate too.** `scripts/ingest_folder.py`,
+`scripts/chat_test.py`, and `rag_chat_test/main_script/test_runner.py` log
+in over HTTP at startup; set `ASAI_USERNAME`/`ASAI_PASSWORD` to override
+the defaults (`admin`/`admin123` for ingest, `demo`/`demo123` for the
+chat tools).
+
 ## Endpoints
 
-- `GET /health` — service, database, and vector store status
-- `POST /api/v1/chat` — runs the full LangGraph workflow above (classify
+- `GET /health` — service, database, and vector store status. **Ungated.**
+- `GET /api/v1/logs/tail` — **ungated**, deliberately: the frontend's
+  console panel is meant to work before login. It serves raw application
+  log lines, which include users' questions — do not expose it publicly.
+- `POST /api/v1/auth/signup` / `login` / `logout` / `me` — see
+  "Authentication" above.
+- `POST /api/v1/chat` — **requires login.** Runs the full LangGraph workflow above (classify
   → refusal (off-topic), or rewrite → retrieve → generate →
   verify/general fallback), persisted to `chat_sessions` / `messages`
   in PostgreSQL. Body:
@@ -446,11 +504,11 @@ calling the LLM directly.
 
   | field | meaning |
   | --- | --- |
-  | `answer_source` | which branch produced the reply: `off_topic_refusal`, `small_talk`, `rag`, or `general_fallback`. Check this instead of string-matching the reply text. |
+  | `answer_source` | which branch produced the reply: `off_topic`, `small_talk`, `rag`, `general_fallback`, or `unverified_fallback`. Check this instead of string-matching the reply text. |
   | `rewritten_query` | the retrieval-optimized rewrite; null on the refusal/small-talk branches |
   | `english_query` | English translation used for the second retrieval pass; null for an already-English message |
   | `retrieved_chunk_count` | chunks retrieved before generation. Can be > 0 even for `general_fallback` — retrieval may return chunks that exist but don't answer the question; generation decides that. |
-  | `verified` | whether verification judged the answer supported. Only set on the `rag` path. When false, `reply` is a fixed "could not verify" message and the generated answer was discarded. |
+  | `verified` | whether verification judged the answer supported. Only set on the `rag` path. When false the answer was regenerated once with the verifier's objection fed back; if that also failed, `reply` is a disclosed general-knowledge answer (`answer_source: unverified_fallback`) and the grounded draft was discarded. |
   | `verification_reason` | the verifier's one-sentence justification — the only place that says why an answer was thrown away |
 
   `citations` is empty for a refusal, small talk, and the
@@ -464,9 +522,13 @@ calling the LLM directly.
   Groq API keys" below for automatic rate-limit fallback.
 - `POST /api/v1/documents/upload`, `POST /api/v1/documents/{id}/ingest`,
   `GET /api/v1/documents`, `GET /api/v1/documents/{id}`,
-  `DELETE /api/v1/documents/{id}` — see "Documents API" above.
-- `POST /api/v1/admin/reset/postgres`, `/vector-store`, `/all` — see
-  "Admin: resetting data" above.
+  `DELETE /api/v1/documents/{id}` — **admin only.** See "Documents API"
+  above. Admin rather than any-logged-in-user because uploading or
+  deleting changes what EVERY user's answers are built from; this is a
+  judgement call, and swapping `require_admin` for `get_current_user` on
+  that router is the whole change if plain users should be able to upload.
+- `POST /api/v1/admin/reset/postgres`, `/vector-store`, `/all`,
+  `/restart` — **admin only.** See "Admin: resetting data" above.
 
 ## Multilingual
 

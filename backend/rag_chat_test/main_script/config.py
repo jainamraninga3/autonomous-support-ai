@@ -13,6 +13,18 @@ from pathlib import Path
 # --- Target API (the actual chat endpoint being tested) ---
 CHAT_API_URL = "http://localhost:8000/api/v1/chat"
 
+# --- API credentials ---
+# /api/v1/chat requires a logged-in caller as of 2026-09-18. This harness
+# still imports nothing from backend/app — it logs in over HTTP like any
+# other client and sends the token as a bearer header.
+#
+# A PLAIN USER by default, not the admin: the harness should exercise the
+# same permissions a real person has, so a question that only works as an
+# admin fails here instead of passing and surprising someone later.
+AUTH_LOGIN_URL = "http://localhost:8000/api/v1/auth/login"
+AUTH_USERNAME = os.environ.get("ASAI_USERNAME") or "demo"
+AUTH_PASSWORD = os.environ.get("ASAI_PASSWORD") or "demo123"
+
 # --- Retrieval/reranking comparison ---
 # /api/v1/chat runs one fixed pipeline (classify -> rewrite -> retrieve ->
 # rerank -> generate -> verify) with no way to change retrieval settings
@@ -23,7 +35,15 @@ CHAT_API_URL = "http://localhost:8000/api/v1/chat"
 # question, each independently scored by the judge LLM, so you can see
 # which reranking/retrieval strategy actually produces the best answer.
 RAG_ASK_API_URL = "http://localhost:8000/api/v1/rag/ask"
-ENABLE_RERANK_VARIANTS = True
+# OFF by default since 2026-09-18. `/api/v1/rag/ask` was REMOVED on
+# 2026-09-02 and folded into /api/v1/chat, so every variant call 404s and
+# the whole `rerank_variant_comparison` block in the report comes back
+# `null` — which reads like "no difference measured" rather than "not
+# measured at all". The variant knobs now live on the chat request itself
+# (`limit`/`alpha`/`rerank`/`top_k`), so re-enabling this properly means
+# pointing `call_rag_ask_api` at CHAT_API_URL with those fields; until
+# someone does that, running it produces misleading nulls.
+ENABLE_RERANK_VARIANTS = False
 
 RERANK_VARIANTS = [
     {"name": "no_rerank__hybrid_0.5", "rerank": False, "alpha": 0.5, "limit": 30, "top_k": 10},

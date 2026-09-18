@@ -47,6 +47,20 @@ class RateLimitError(AppException):
     error_code = "rate_limited"
 
 
+class UnauthorizedError(AppException):
+    """Raised when a request has no valid session (missing/expired/unknown token)."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+    error_code = "unauthorized"
+
+
+class ForbiddenError(AppException):
+    """Raised when a logged-in user's role doesn't permit the action."""
+
+    status_code = status.HTTP_403_FORBIDDEN
+    error_code = "forbidden"
+
+
 def register_exception_handlers(app: FastAPI) -> None:
     """Attach centralized exception handlers to the FastAPI app."""
 

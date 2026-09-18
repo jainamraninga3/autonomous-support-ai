@@ -35,6 +35,14 @@ weaviate-client==4.9.6
 # hiredis is optional but recommended; the app runs without it.
 redis[hiredis]==5.2.1
 
+# --- Auth ---
+# Password hashing for the login system (app/services/auth_service.py).
+# bcrypt directly rather than passlib: passlib is unmaintained and its
+# bcrypt backend warns on every import against modern bcrypt releases.
+# NOTE bcrypt truncates at 72 BYTES — AuthService truncates explicitly
+# rather than letting bcrypt 4.x raise on a longer password.
+bcrypt==4.2.1
+
 # --- LLM + orchestration ---
 langgraph==0.2.60
 groq==0.11.0

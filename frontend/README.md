@@ -62,10 +62,37 @@ Worth knowing: `N chunks` can be greater than zero on a `general
 knowledge` answer. Retrieval finds candidates; generation decides whether
 they actually answer the question. That is not a bug.
 
+## Logging in
+
+The backend requires an account for everything except `/health` and the
+log tail, so the chat is unusable logged out — the composer still accepts
+a message, but the UI answers with "please log in" rather than firing a
+request it knows will 401.
+
+Two accounts are seeded by the backend at startup:
+
+| username | password | sees |
+| --- | --- | --- |
+| `admin` | `admin123` | everything, including the four destructive toolbar buttons |
+| `demo` | `demo123` | chat and the console panel; no reset/restart buttons |
+
+**Log in** / **Sign up** are top-right; signing up always creates a plain
+user and logs you straight in. The token lives in `localStorage` under
+`asai.token` and is restored on page load — a 401 on that restore just
+means the session expired and is handled silently.
+
+Sessions last 24h of INACTIVITY, not 24h absolute: every authenticated
+request slides the expiry forward.
+
+**Hiding the admin buttons is presentation, not security.** The backend
+requires `role == "admin"` on those routes regardless of what this UI
+renders; a plain user who called them directly would get a 403.
+
 ## Toolbar buttons
 
-All four are confirmed with a dialog that says exactly what is destroyed,
-because none of them are reversible.
+Admin only — a plain user does not see these. All four are confirmed with
+a dialog that says exactly what is destroyed, because none of them are
+reversible.
 
 | button | endpoint | effect |
 | --- | --- | --- |
@@ -94,12 +121,13 @@ frontend/
 │   ├── page.tsx          state, API orchestration, the 60/40 split
 │   └── globals.css       Tailwind + .panel/.btn-*/.badge component classes
 ├── components/
+│   ├── AuthModal.tsx     login/signup — one component, two modes
 │   ├── ChatPanel.tsx     transcript, composer, suggestions, typing state
 │   ├── MessageBubble.tsx one message + its diagnostic badges and details
 │   ├── ConsolePanel.tsx  log viewer: filters, follow, pause, clear
-│   └── Toolbar.tsx       health indicator + confirmed admin actions
+│   └── Toolbar.tsx       health + auth area + confirmed admin actions
 └── lib/
-    ├── api.ts            typed fetch wrappers; ApiError carries status
+    ├── api.ts            typed fetch wrappers; token storage + Bearer header
     ├── types.ts          mirrors the backend Pydantic schemas
     └── useConsole.ts     cursor-based log polling + client-side entries
 ```
@@ -114,7 +142,11 @@ Two things had to be added to the backend for this to work:
 2. **`GET /api/v1/logs/tail`** (`app/api/routes/logs.py`) — serves
    `logs/app.log` with a byte cursor.
 
-Both are unauthenticated, like the admin router. Development only.
+`/api/v1/logs/tail` is deliberately left UNAUTHENTICATED so the console
+panel works before login. It serves raw application log lines, which
+include other users' questions — fine for a LAN dev tool, wrong for
+anything public. The admin router is no longer in that category: it
+requires an admin account as of 2026-09-18.
 
 ## Troubleshooting
 

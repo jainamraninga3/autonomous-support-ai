@@ -26,6 +26,7 @@ land at 2-6 chunks/page while screenshot manuals sat at 0.2-1.0.
 """
 
 import argparse
+import os
 import sys
 import time
 from pathlib import Path
@@ -69,7 +70,31 @@ class Row:
         self.seconds = 0.0
 
 
+# Filled in by `_login`. `/api/v1/documents/*` became admin-only on
+# 2026-09-18, so this script — which is an HTTP client like any other —
+# now has to authenticate. Credentials come from ASAI_USERNAME/ASAI_PASSWORD
+# or `--username`/`--password`, defaulting to the seeded demo admin.
+_AUTH_HEADERS: dict[str, str] = {}
+
+
+def _login(api: str, username: str, password: str) -> None:
+    """Exchange credentials for a bearer token, once, for the whole run."""
+    response = requests.post(
+        f"{api}/api/v1/auth/login",
+        json={"username": username, "password": password},
+        timeout=30,
+    )
+    if not response.ok:
+        raise RuntimeError(
+            f"Login failed for '{username}' (HTTP {response.status_code}). "
+            f"Uploading needs an ADMIN account — the seeded one is admin/admin123, "
+            f"or pass --username/--password."
+        )
+    _AUTH_HEADERS["Authorization"] = f"Bearer {response.json()['token']}"
+
+
 def _post(url: str, **kwargs) -> dict:
+    kwargs["headers"] = {**_AUTH_HEADERS, **kwargs.get("headers", {})}
     response = requests.post(url, **kwargs)
     if not response.ok:
         # FastAPI's error shape is {"detail": ...}; fall back to raw text
@@ -125,7 +150,7 @@ def verify(api: str, weaviate: str) -> None:
     print("=" * 78)
 
     try:
-        response = requests.get(f"{api}/api/v1/documents", timeout=60)
+        response = requests.get(f"{api}/api/v1/documents", headers=_AUTH_HEADERS, timeout=60)
         response.raise_for_status()
         documents = response.json()
     except Exception as exc:  # noqa: BLE001
@@ -231,6 +256,17 @@ def main() -> int:
             "is otherwise deduplicated by hash and keeps its existing chunks."
         ),
     )
+    parser.add_argument(
+        "--username",
+        default=os.environ.get("ASAI_USERNAME", "admin"),
+        help="API account to authenticate as. Must be an admin — the documents "
+        "routes are admin-only. Default: $ASAI_USERNAME, else 'admin'.",
+    )
+    parser.add_argument(
+        "--password",
+        default=os.environ.get("ASAI_PASSWORD", "admin123"),
+        help="Password for --username. Default: $ASAI_PASSWORD, else 'admin123'.",
+    )
     parser.add_argument("--recursive", action="store_true", help="Include PDFs in subfolders.")
     parser.add_argument("--no-verify", action="store_true", help="Skip the verification report.")
     parser.add_argument(
@@ -251,6 +287,14 @@ def main() -> int:
     except Exception as exc:  # noqa: BLE001
         print(f"Cannot reach the backend at {api}: {exc}", file=sys.stderr)
         print("Start it first:  docker compose up -d", file=sys.stderr)
+        return 1
+
+    # Before anything that talks to a gated route — including --verify-only,
+    # which lists documents.
+    try:
+        _login(api, args.username, args.password)
+    except Exception as exc:  # noqa: BLE001
+        print(f"{exc}", file=sys.stderr)
         return 1
 
     if args.verify_only:

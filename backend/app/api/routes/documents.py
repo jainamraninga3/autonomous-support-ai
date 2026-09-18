@@ -16,7 +16,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, UploadFile
 
-from app.api.dependencies import get_document_service
+from app.api.dependencies import get_document_service, require_admin
 from app.rag.ingestion.embedder import is_already_embedded
 from app.schemas.document import (
     DocumentDeleteResponse,
@@ -27,7 +27,15 @@ from app.schemas.document import (
 )
 from app.services.document_service import DocumentService
 
-router = APIRouter(prefix="/documents", tags=["documents"])
+# ADMIN ONLY as of 2026-09-18. Uploading, re-embedding and deleting
+# documents change what EVERY user's answers are built from, so they sit
+# with the other elevated actions rather than with ordinary chat. This is a
+# judgement call, not a stated requirement — if plain users should be able
+# to upload, swap `require_admin` for `get_current_user` here and nothing
+# else changes. There is no frontend upload UI either way, so this gates
+# only Swagger and the CLI scripts (which talk to the API over HTTP and
+# will now need a token).
+router = APIRouter(prefix="/documents", tags=["documents"], dependencies=[Depends(require_admin)])
 
 
 @router.post("/upload", response_model=DocumentUploadResponse)

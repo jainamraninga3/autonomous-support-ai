@@ -115,3 +115,17 @@ export type LogLevel =
   | "ERROR"
   | "CRITICAL"
   | "PLAIN";
+
+/** A logged-in account, as returned by the auth endpoints. */
+export interface User {
+  id: string;
+  username: string;
+  full_name: string;
+  /** "admin" unlocks the destructive Toolbar actions; "user" does not. */
+  role: "admin" | "user";
+}
+
+export interface LoginResponse {
+  token: string;
+  user: User;
+}

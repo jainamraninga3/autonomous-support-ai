@@ -23,6 +23,7 @@ brief-vs-detailed rules in `answer_generator.py` are tuned against.
 
 import argparse
 import json
+import os
 import re
 import sys
 import time
@@ -31,15 +32,39 @@ import urllib.request
 
 DEFAULT_URL = "http://localhost:8000/api/v1/chat"
 
+# Filled in by `_login`. /api/v1/chat requires a logged-in caller as of
+# 2026-09-18, so this script authenticates like any other client.
+_AUTH_HEADERS = {}
+
+
+def _login(chat_url, username, password, timeout):
+    """Log in and remember the bearer token for the rest of the run.
+
+    Derives the auth URL from --url so pointing this at a different host
+    still works with one flag.
+    """
+    base = chat_url.split("/api/v1/")[0]
+    request = urllib.request.Request(
+        f"{base}/api/v1/auth/login",
+        data=json.dumps({"username": username, "password": password}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        _AUTH_HEADERS["Authorization"] = f"Bearer {json.loads(response.read().decode('utf-8'))['token']}"
+
 
 def _ask(url, message, conversation_id, user_id, timeout):
+    # `user_id` is still sent, and the server now IGNORES it — identity
+    # comes from the token. Kept so the flag doesn't break, and because a
+    # request that still carries it is exactly what the override protects
+    # against.
     payload = {"message": message, "user_id": user_id}
     if conversation_id:
         payload["conversation_id"] = conversation_id
     request = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", **_AUTH_HEADERS},
     )
     started = time.monotonic()
     with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -125,7 +150,22 @@ def main():
     parser.add_argument("questions", nargs="*", help="questions to ask, in order")
     parser.add_argument("-f", "--file", help="file of questions; blank line = new conversation")
     parser.add_argument("--url", default=DEFAULT_URL)
-    parser.add_argument("--user", default="chat-test", help="user_id sent with every message")
+    parser.add_argument(
+        "--user",
+        default="chat-test",
+        help="user_id sent with every message. IGNORED by the server since 2026-09-18 — "
+        "identity comes from the logged-in account. Use --username to change who you are.",
+    )
+    parser.add_argument(
+        "--username",
+        default=os.environ.get("ASAI_USERNAME", "demo"),
+        help="API account to log in as. Default: $ASAI_USERNAME, else 'demo'.",
+    )
+    parser.add_argument(
+        "--password",
+        default=os.environ.get("ASAI_PASSWORD", "demo123"),
+        help="Password for --username. Default: $ASAI_PASSWORD, else 'demo123'.",
+    )
     parser.add_argument("--timeout", type=float, default=300.0)
     parser.add_argument(
         "--new-session",
@@ -135,15 +175,28 @@ def main():
     parser.add_argument(
         "--conversation-id",
         help=(
-            "join an existing conversation. Pass another user's id together with a "
-            "different --user to check isolation: you must NOT get their history back, "
-            "and the reply should carry a different conversation_id"
+            "join an existing conversation. Pass another account's conversation_id "
+            "together with a different --username to check isolation: you must NOT get "
+            "their history back, and the reply should carry a different conversation_id"
         ),
     )
     args = parser.parse_args()
 
     if hasattr(sys.stdout, "reconfigure"):  # Windows consoles default to cp1252
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+    try:
+        _login(args.url, args.username, args.password, args.timeout)
+    except urllib.error.HTTPError as exc:
+        print(
+            f"Login failed for '{args.username}' (HTTP {exc.code}). The seeded accounts "
+            f"are demo/demo123 and admin/admin123.",
+            file=sys.stderr,
+        )
+        return 1
+    except urllib.error.URLError as exc:
+        print(f"Could not reach the backend: {exc}", file=sys.stderr)
+        return 1
 
     if args.file:
         blocks = _read_questions(args.file)

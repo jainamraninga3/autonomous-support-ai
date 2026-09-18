@@ -1,13 +1,14 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { AuthModal, type AuthMode } from "@/components/AuthModal";
 import { ChatPanel } from "@/components/ChatPanel";
 import { ConsolePanel } from "@/components/ConsolePanel";
 import { Toolbar } from "@/components/Toolbar";
 import * as api from "@/lib/api";
 import { ApiError } from "@/lib/api";
 import { useConsole } from "@/lib/useConsole";
-import type { ChatMessage, HealthResponse } from "@/lib/types";
+import type { ChatMessage, HealthResponse, User } from "@/lib/types";
 
 let messageCounter = 0;
 const nextMessageId = () => `m${Date.now()}-${messageCounter++}`;
@@ -18,6 +19,8 @@ export default function Page() {
   const [sending, setSending] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [health, setHealth] = useState<HealthResponse | null>(null);
+  const [user, setUser] = useState<User | null>(null);
+  const [authMode, setAuthMode] = useState<AuthMode | null>(null);
 
   const { entries, pushClient, clear, backendReachable, paused, setPaused } = useConsole();
 
@@ -39,7 +42,73 @@ export default function Page() {
     void checkHealth();
   }, [checkHealth]);
 
+  // Restore a session from the token in localStorage. A 401 here is the
+  // NORMAL logged-out state, not a failure — it is silent, and the stored
+  // token is cleared so a stale one isn't sent on every later request.
+  useEffect(() => {
+    if (!api.getToken()) return;
+    void (async () => {
+      try {
+        const me = await api.getMe();
+        setUser(me);
+        pushClient(`signed in as ${me.username} (${me.role})`);
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 401) {
+          api.setToken(null);
+        } else {
+          pushClient(
+            `could not restore session: ${error instanceof ApiError ? error.message : String(error)}`,
+            "WARNING",
+          );
+        }
+      }
+    })();
+  }, [pushClient]);
+
+  const onAuthSuccess = ({ token, user: account }: { token: string; user: User }) => {
+    api.setToken(token);
+    setUser(account);
+    setAuthMode(null);
+    pushClient(`signed in as ${account.username} (${account.role})`);
+  };
+
+  const onLogout = async () => {
+    try {
+      await api.logout();
+    } catch {
+      // The server rejecting the logout must never leave the UI stuck in a
+      // logged-in state — clearing the token locally is what actually logs
+      // the person out from their point of view.
+    }
+    api.setToken(null);
+    setUser(null);
+    // A new user must not inherit the previous one's conversation: the
+    // backend would refuse to hand over that session anyway (ownership is
+    // enforced in SQL), so keeping the id would silently start a new
+    // conversation with the old messages still on screen.
+    setMessages([]);
+    setConversationId(null);
+    pushClient("logged out");
+  };
+
   const send = async (text: string) => {
+    // Defense in depth on top of the backend's 401 — this only exists so
+    // the person gets a sentence instead of a failed request.
+    if (!user) {
+      setMessages((prev) => [
+        ...prev,
+        { id: nextMessageId(), role: "user", content: text, at: Date.now() },
+        {
+          id: nextMessageId(),
+          role: "assistant",
+          content: "Please log in to ask a question — use the **Log in** button at the top right.",
+          at: Date.now(),
+        },
+      ]);
+      setAuthMode("login");
+      return;
+    }
+
     setMessages((prev) => [
       ...prev,
       { id: nextMessageId(), role: "user", content: text, at: Date.now() },
@@ -89,6 +158,14 @@ export default function Page() {
       }
     } catch (error) {
       const message = error instanceof ApiError ? error.message : String(error);
+      // The 24h session expired, or it was revoked. Drop to the logged-out
+      // state rather than leaving a name in the toolbar for a session the
+      // server no longer honours.
+      if (error instanceof ApiError && error.status === 401) {
+        api.setToken(null);
+        setUser(null);
+        setAuthMode("login");
+      }
       setMessages((prev) => [
         ...prev,
         {
@@ -140,6 +217,10 @@ export default function Page() {
         health={health}
         backendReachable={backendReachable}
         busy={busy}
+        user={user}
+        onLogin={() => setAuthMode("login")}
+        onSignup={() => setAuthMode("signup")}
+        onLogout={() => void onLogout()}
         onCheckHealth={() => void checkHealth()}
         onRefreshChat={refreshChat}
         onResetPostgres={() =>
@@ -197,6 +278,15 @@ export default function Page() {
           onTogglePause={() => setPaused((v) => !v)}
         />
       </div>
+
+      {authMode && (
+        <AuthModal
+          mode={authMode}
+          onModeChange={setAuthMode}
+          onClose={() => setAuthMode(null)}
+          onSuccess={onAuthSuccess}
+        />
+      )}
     </main>
   );
 }

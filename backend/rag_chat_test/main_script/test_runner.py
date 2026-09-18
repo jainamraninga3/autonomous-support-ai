@@ -249,6 +249,31 @@ def load_questions():
     return questions
 
 
+# Filled in by `login()` before the run starts.
+_AUTH_HEADERS = {}
+
+
+def login():
+    """Authenticate once for the whole run.
+
+    Raises rather than returning a flag: every question would otherwise
+    come back `ERROR http_status=401` and the report would blame the
+    pipeline for what is a missing login.
+    """
+    resp = requests.post(
+        config.AUTH_LOGIN_URL,
+        json={"username": config.AUTH_USERNAME, "password": config.AUTH_PASSWORD},
+        timeout=30,
+    )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"Login failed for '{config.AUTH_USERNAME}' (HTTP {resp.status_code}). "
+            f"The backend seeds demo/demo123 and admin/admin123 at startup; set "
+            f"ASAI_USERNAME/ASAI_PASSWORD to use different credentials."
+        )
+    _AUTH_HEADERS["Authorization"] = f"Bearer {resp.json()['token']}"
+
+
 def _post_json(url, payload):
     """POST payload to url, returning a uniform result dict.
 
@@ -260,7 +285,11 @@ def _post_json(url, payload):
     try:
         resp = requests.post(
             url,
-            headers={"accept": "application/json", "Content-Type": "application/json"},
+            headers={
+                "accept": "application/json",
+                "Content-Type": "application/json",
+                **_AUTH_HEADERS,
+            },
             json=payload,
             timeout=config.REQUEST_TIMEOUT_SECONDS,
         )
@@ -539,7 +568,14 @@ def main():
     print(f"Loaded {len(questions)} question(s) from {config.INPUT_FILE}")
     timeout_display = "none (waits indefinitely)" if config.REQUEST_TIMEOUT_SECONDS is None else f"{config.REQUEST_TIMEOUT_SECONDS}s"
     print(f"Target API: {config.CHAT_API_URL}  |  per-question timeout: {timeout_display}")
-    print(f"Judge model: {config.GROQ_MODEL} (Groq)\n")
+    print(f"Judge model: {config.GROQ_MODEL} (Groq)")
+
+    try:
+        login()
+        print(f"Authenticated as: {config.AUTH_USERNAME}\n")
+    except Exception as exc:  # noqa: BLE001
+        print(f"\n{exc}")
+        return 1
 
     results = []
     last_conversation_id = None
@@ -732,4 +768,6 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    # `main` returns 1 when login fails, so a failed run exits non-zero
+    # instead of looking like a clean run that produced no report.
+    raise SystemExit(main() or 0)

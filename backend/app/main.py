@@ -6,11 +6,13 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import admin, chat, documents, health, logs
+from app.api.routes import admin, auth, chat, documents, health, logs
 from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging, get_logger
+from app.database.connection import AsyncSessionLocal
 from app.database.vector_store import get_weaviate_client
+from app.services.auth_service import ensure_demo_users
 
 from app.infrastructure.redis.client import create_redis_client, close_redis_client
 
@@ -38,6 +40,12 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     else:
         logger.info("Session memory (Redis) is disabled by configuration")
         app.state.redis_client = None
+
+    # Seed the demo admin/demo accounts so a fresh `docker compose up` has
+    # working logins with no manual step. Idempotent, and it swallows its
+    # own errors — a database that hasn't been migrated yet must not stop
+    # the app from booting.
+    await ensure_demo_users(AsyncSessionLocal)
 
     yield
 
@@ -68,6 +76,7 @@ app.add_middleware(
 register_exception_handlers(app)
 
 app.include_router(health.router)
+app.include_router(auth.router, prefix=settings.API_V1_PREFIX)
 app.include_router(chat.router, prefix=settings.API_V1_PREFIX)
 app.include_router(documents.router, prefix=settings.API_V1_PREFIX)
 app.include_router(admin.router, prefix=settings.API_V1_PREFIX)

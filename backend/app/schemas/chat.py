@@ -27,7 +27,14 @@ class ChatRequest(BaseModel):
     )
     user_id: str | None = Field(
         default=None,
-        description="Optional user identifier for session isolation boundary.",
+        description=(
+            "IGNORED as of 2026-09-18. The route overwrites this with the "
+            "authenticated user's id before the service sees it — a "
+            "client-supplied value would let anyone claim another person's "
+            "sessions, since ownership is enforced in SQL against exactly "
+            "this field. Kept on the schema so an older client that still "
+            "sends it gets the safe behaviour rather than a 422."
+        ),
     )
 
     # --- Retrieval overrides (optional; omit for the configured defaults) ---
