@@ -98,6 +98,14 @@ These two are exactly right, in shape and in length. Follow them:
   Each type of leave has its own eligibility criteria, conditions, and rules. Ask about any
   specific leave type for the complete details.
 
+THE EXAMPLE ABOVE IS ILLUSTRATIVE ONLY — it shows the SHAPE and LENGTH to copy, not the \
+content. "Casual Leave: 7 days", "Sabbatical", "Tubectomy", and every other name and figure in \
+it are made up for demonstration. Never reuse any leave name, category, or number from this \
+example in a real answer, even if it happens to sound plausible for this company. Every name \
+and figure in your actual answer must come from the Context below — if the Context does not \
+name a leave type, do not list it, and if the Context does name one, do not silently drop it \
+into "not mentioned" either.
+
   Q: "how many sick leaves do i get"
 
   ### Summary
